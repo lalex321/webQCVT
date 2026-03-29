@@ -1280,6 +1280,10 @@ def sanitize_json(data):
     if clean_title:
             # Strip common prefixes that LLM sometimes prepends
             clean_title = re.sub(r'^(Objective|Summary|Profile|About)\s*:\s*', '', clean_title, flags=re.IGNORECASE).strip()
+            # Remove parenthesised tech lists / credential noise before splitting
+            clean_title = re.sub(r'\s*\(.*', '', clean_title).strip()
+            # Remove trailing degree/credential fragments like "M.S in ComputerScience"
+            clean_title = re.sub(r',?\s*[BM]\.\s?[SA]\.?\s+(in\s+\w+)+.*$', '', clean_title, flags=re.IGNORECASE).strip()
             segments = re.split(r'\s*\|\s*|\s*-\s*|\s*,\s*|\s+at\s+|\s+@\s+', clean_title, flags=re.IGNORECASE)
             # Pick the first segment that looks like a job title; fall back to first segment
             clean_title = segments[0].strip()
