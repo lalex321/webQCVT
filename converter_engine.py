@@ -29,10 +29,10 @@ def validate_jd(jd_text: str) -> str | None:
     if not jd_text or not jd_text.strip():
         return "Job Description is empty."
     text = jd_text.strip()
-    if len(text) < 50:
+    if len(text) < 20:
         return f"Job Description is too short ({len(text)} chars). Please provide a full JD."
     words = text.split()
-    if len(words) < 15:
+    if len(words) < 5:
         return f"Job Description has only {len(words)} words. Please provide a more detailed JD."
     text_lower = text.lower()
     hits = sum(1 for m in _JD_MARKERS if m in text_lower)
