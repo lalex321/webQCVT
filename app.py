@@ -17,7 +17,7 @@ from html import escape
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from converter_engine import InMemoryJobStore, QCVWebEngine, make_temp_workspace, resolve_api_key
+from converter_engine import InMemoryJobStore, LowRelevanceError, QCVWebEngine, make_temp_workspace, resolve_api_key
 import cv_engine as _core
 
 APP_DIR = Path(__file__).resolve().parent
@@ -324,35 +324,6 @@ def _build_processing_details(
     return details
 
 
-def _pre_screen_relevance(data: dict, jd_text: str) -> str:
-    """Quick LLM check: returns HIGH, MEDIUM, or LOW."""
-    try:
-        name = data.get("basics", {}).get("name", "Unknown")
-        title = data.get("basics", {}).get("current_title", "")
-        skills = data.get("skills", {})
-        skills_flat = ", ".join(s for cat in skills.values() if isinstance(cat, list) for s in cat[:10])
-        prompt = (
-            f"Is this candidate's PROFESSIONAL DOMAIN relevant to the job description? "
-            f"Focus on the candidate's job title and core industry — ignore generic skills like 'teamwork' or 'quality control'. "
-            f"Answer HIGH if the candidate works in the same professional field. "
-            f"Answer MEDIUM if there is meaningful overlap in technologies or transferable technical skills. "
-            f"Answer LOW if the candidate works in a completely different industry with no relevant technical overlap "
-            f"(e.g. agriculture/farming/veterinary vs software engineering, or retail vs data science). "
-            f"Reply with ONLY one word: HIGH, MEDIUM, or LOW.\n\n"
-            f"Candidate title: {title}\nCandidate skills: {skills_flat[:500]}\n\n"
-            f"Job Description (first 1000 chars):\n{jd_text[:1000]}"
-        )
-        client = _core._make_genai_client(_core.load_config().get("api_key", "") or os.environ.get("GEMINI_API_KEY", ""))
-        resp = _core._retry_generate(client, _core.MODEL_NAME, prompt)
-        result = (resp.text or "").strip().upper()
-        for word in result.split():
-            if word in ("HIGH", "MEDIUM", "LOW"):
-                return word
-    except Exception:
-        pass
-    return "MEDIUM"
-
-
 def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float) -> None:
     try:
         def cb(status: str, progress: int) -> None:
@@ -362,24 +333,6 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             jobs.update(job_id, debug=text)
 
         job_engine = QCVWebEngine(TEMPLATES_DIR)
-
-        # Pre-screen relevance if tailoring (unless forced)
-        if tailor and jd_text.strip() and not force_tailor:
-            cb("Pre-screening relevance", 10)
-            # Quick extraction for screening (use cached if available)
-            screen_data = job_engine._parse_cv_file_to_json(source_path)
-            relevance = _pre_screen_relevance(screen_data, jd_text)
-            if relevance == "LOW":
-                jobs.update(job_id, status="Low Relevance", progress=100,
-                           error="This CV does not appear relevant to the provided Job Description.")
-                append_usage({
-                    "event": "skipped_low_relevance",
-                    "job_id": job_id, "ip": client_ip,
-                    "file": source_path.name, "tailor": True,
-                    "duration_sec": round(time.time() - started_at, 2),
-                })
-                return
-
         result_path = job_engine.process(
             source_path=source_path,
             output_dir=workdir,
@@ -387,6 +340,7 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             autofix=autofix,
             tailor=tailor,
             jd_text=jd_text,
+            force_tailor=force_tailor,
             template_name=template_name,
             source_key=source_key,
             status_cb=cb,
@@ -416,6 +370,14 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             "anonymize": anonymize,
             "autofix": autofix,
             "tailor": tailor,
+            "duration_sec": round(time.time() - started_at, 2),
+        })
+    except LowRelevanceError as e:
+        jobs.update(job_id, status="Low Relevance", progress=100, error=str(e))
+        append_usage({
+            "event": "skipped_low_relevance",
+            "job_id": job_id, "ip": client_ip,
+            "file": source_path.name, "tailor": True,
             "duration_sec": round(time.time() - started_at, 2),
         })
     except Exception as e:

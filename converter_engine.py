@@ -13,6 +13,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
+
+class LowRelevanceError(Exception):
+    """Raised when CV is not relevant to the provided JD."""
+    pass
+
 from google import genai
 from google.genai import types as genai_types
 
@@ -621,6 +626,41 @@ class QCVWebEngine:
 
         return out
 
+    def _check_relevance(self, data: dict, jd_text: str) -> str:
+        """Quick LLM check on extracted JSON: returns HIGH, MEDIUM, or LOW."""
+        try:
+            title = data.get("basics", {}).get("current_title", "")
+            skills = data.get("skills", {})
+            skills_flat = ", ".join(s for cat in skills.values() if isinstance(cat, list) for s in cat[:10])
+            # Include first experience role for better context
+            exp_summary = ""
+            for exp in (data.get("experience") or [])[:2]:
+                exp_summary += f"{exp.get('role', '')} at {exp.get('company_name', '')}. "
+            prompt = (
+                f"Is this candidate's PROFESSIONAL DOMAIN relevant to the job description? "
+                f"Focus on the candidate's job title, industry, and core technical skills. "
+                f"Answer HIGH if the candidate works in the same professional field. "
+                f"Answer MEDIUM if there is meaningful overlap in technologies or transferable technical skills. "
+                f"Answer LOW if the candidate works in a completely different industry with no relevant technical overlap "
+                f"(e.g. agriculture/farming vs software engineering, hospitality vs data science). "
+                f"Reply with ONLY one word: HIGH, MEDIUM, or LOW.\n\n"
+                f"Candidate title: {title}\nRecent roles: {exp_summary}\nSkills: {skills_flat[:500]}\n\n"
+                f"Job Description (first 1000 chars):\n{jd_text[:1000]}"
+            )
+            raw = call_llm_json.__wrapped__(prompt, self.model_name) if hasattr(call_llm_json, '__wrapped__') else None
+            # Use direct LLM call instead of call_llm_json (which expects JSON response)
+            client = core._make_genai_client(
+                self.config.get("gemini_api_key") or self.config.get("api_key") or os.environ.get("GEMINI_API_KEY", "")
+            )
+            resp = core._retry_generate(client, self.model_name, prompt)
+            result = (resp.text or "").strip().upper()
+            for word in result.split():
+                if word in ("HIGH", "MEDIUM", "LOW"):
+                    return word
+        except Exception:
+            pass
+        return "MEDIUM"
+
     def _apply_tailor(self, data: dict, jd_text: str) -> dict:
         """Tailor the extracted CV JSON to match a Job Description."""
         prompt_template = self.config.get("prompt_tailor", core.DEFAULT_PROMPTS.get("prompt_tailor", ""))
@@ -742,6 +782,7 @@ class QCVWebEngine:
         autofix: bool = False,
         tailor: bool = False,
         jd_text: str = "",
+        force_tailor: bool = False,
         template_name: str,
         source_key: str | None = None,
         status_cb: Optional[StatusCallback] = None,
@@ -783,6 +824,11 @@ class QCVWebEngine:
             data = self._apply_autofix(data)
 
         if tailor and jd_text.strip():
+            if not force_tailor:
+                self._status(status_cb, "Checking relevance", 65)
+                relevance = self._check_relevance(data, jd_text)
+                if relevance == "LOW":
+                    raise LowRelevanceError("This CV does not appear relevant to the provided Job Description.")
             self._status(status_cb, "Tailoring to JD", 70)
             data = self._apply_tailor(data, jd_text)
 
