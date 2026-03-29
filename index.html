@@ -349,6 +349,16 @@
             </div>
           </div>
 
+          <div class="field">
+            <div class="check-card">
+              <label><input id="tailor" type="checkbox" /> Tailor to JD</label>
+            </div>
+          </div>
+          <div id="jdField" class="field hidden">
+            <label for="jdText">Job Description</label>
+            <textarea id="jdText" rows="5" placeholder="Paste the job description here..." style="display:block;width:100%;padding:11px 14px;border:1px solid #cfd8e3;border-radius:18px;background:#fff;color:#111827;font-size:15px;font-family:inherit;resize:vertical;"></textarea>
+          </div>
+
           <div class="action-row">
             <button id="generateBtn" class="primary" type="submit">Convert</button>
             <a id="topDownloadLink" class="secondary hidden" href="#">Download</a>
@@ -386,13 +396,18 @@
   <script>
     const STORAGE_KEYS = {
       anonymize: "qcv_anonymize",
-      template: "qcv_template"
+      template: "qcv_template",
+      tailor: "qcv_tailor",
+      jd_text: "qcv_jd_text"
     };
 
     const form = document.getElementById("uploadForm");
     const fileInput = document.getElementById("file");
     const templateSelect = document.getElementById("template");
     const anonymizeInput = document.getElementById("anonymize");
+    const tailorInput = document.getElementById("tailor");
+    const jdField = document.getElementById("jdField");
+    const jdText = document.getElementById("jdText");
     const generateBtn = document.getElementById("generateBtn");
     const topDownloadLink = document.getElementById("topDownloadLink");
 
@@ -557,10 +572,14 @@
     function savePrefs() {
       localStorage.setItem(STORAGE_KEYS.anonymize, anonymizeInput.checked ? "1" : "0");
       localStorage.setItem(STORAGE_KEYS.template, templateSelect.value || "");
+      localStorage.setItem(STORAGE_KEYS.tailor, tailorInput.checked ? "1" : "0");
     }
 
     function loadPrefs() {
       anonymizeInput.checked = localStorage.getItem(STORAGE_KEYS.anonymize) === "1";
+      tailorInput.checked = localStorage.getItem(STORAGE_KEYS.tailor) === "1";
+      jdField.classList.toggle("hidden", !tailorInput.checked);
+      jdText.value = localStorage.getItem(STORAGE_KEYS.jd_text) || "";
     }
 
     async function loadTemplates() {
@@ -695,6 +714,14 @@
       savePrefs();
       resetForNewInput();
     });
+    tailorInput.addEventListener("change", () => {
+      jdField.classList.toggle("hidden", !tailorInput.checked);
+      savePrefs();
+      resetForNewInput();
+    });
+    jdText.addEventListener("blur", () => {
+      localStorage.setItem(STORAGE_KEYS.jd_text, jdText.value);
+    });
     templateSelect.addEventListener("change", () => {
       savePrefs();
       resetForNewInput();
@@ -729,6 +756,8 @@
       formData.append("file", file);
       formData.append("anonymize", anonymizeInput.checked ? "true" : "false");
       formData.append("autofix", "false");
+      formData.append("tailor", tailorInput.checked ? "true" : "false");
+      formData.append("jd_text", tailorInput.checked ? jdText.value : "");
       formData.append("template_name", templateSelect.value);
 
       try {

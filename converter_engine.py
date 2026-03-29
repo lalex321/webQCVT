@@ -619,6 +619,19 @@ class QCVWebEngine:
 
         return out
 
+    def _apply_tailor(self, data: dict, jd_text: str) -> dict:
+        """Tailor the extracted CV JSON to match a Job Description."""
+        prompt_template = self.config.get("prompt_tailor", core.DEFAULT_PROMPTS.get("prompt_tailor", ""))
+        if not prompt_template:
+            return data
+        input_json_str = json.dumps(data, ensure_ascii=False)
+        prompt = prompt_template.replace("{jd_text}", jd_text).replace("{input_json_str}", input_json_str)
+        raw_data = call_llm_json(prompt, self.model_name)
+        cv_data = raw_data.get("cv", raw_data) if isinstance(raw_data, dict) else raw_data
+        if hasattr(core, "sanitize_json"):
+            cv_data = core.sanitize_json(cv_data)
+        return cv_data
+
     def _generate_docx(
         self,
         data: dict,
@@ -724,6 +737,8 @@ class QCVWebEngine:
         *,
         anonymize: bool = False,
         autofix: bool = False,
+        tailor: bool = False,
+        jd_text: str = "",
         template_name: str,
         source_key: str | None = None,
         status_cb: Optional[StatusCallback] = None,
@@ -763,6 +778,10 @@ class QCVWebEngine:
         if autofix:
             self._status(status_cb, "AutoFix", 60)
             data = self._apply_autofix(data)
+
+        if tailor and jd_text.strip():
+            self._status(status_cb, "Tailoring to JD", 70)
+            data = self._apply_tailor(data, jd_text)
 
         if anonymize:
             self._status(status_cb, "Anonymizing", 75)

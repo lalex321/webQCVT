@@ -324,7 +324,7 @@ def _build_processing_details(
     return details
 
 
-def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float) -> None:
+def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, template_name: str, source_key: str | None, client_ip: str, started_at: float) -> None:
     try:
         def cb(status: str, progress: int) -> None:
             jobs.update(job_id, status=status, progress=progress)
@@ -338,6 +338,8 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             output_dir=workdir,
             anonymize=anonymize,
             autofix=autofix,
+            tailor=tailor,
+            jd_text=jd_text,
             template_name=template_name,
             source_key=source_key,
             status_cb=cb,
@@ -366,6 +368,7 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             "template": template_name,
             "anonymize": anonymize,
             "autofix": autofix,
+            "tailor": tailor,
             "duration_sec": round(time.time() - started_at, 2),
         })
     except Exception as e:
@@ -378,6 +381,7 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             "template": template_name,
             "anonymize": anonymize,
             "autofix": autofix,
+            "tailor": tailor,
             "duration_sec": round(time.time() - started_at, 2),
             "error": str(e),
         })
@@ -389,11 +393,16 @@ async def create_job(
     file: UploadFile = File(...),
     anonymize: bool = Form(False),
     autofix: bool = Form(False),
+    tailor: bool = Form(False),
+    jd_text: str = Form(""),
     template_name: str = Form(...),
 ):
     suffix = Path(file.filename or "upload.docx").suffix.lower()
     if suffix not in {".pdf", ".docx", ".png", ".jpg", ".jpeg"}:
         raise HTTPException(status_code=400, detail="Only PDF, DOCX, PNG, JPG, and JPEG are supported.")
+
+    if tailor and not jd_text.strip():
+        raise HTTPException(status_code=400, detail="Job description is required when tailoring is enabled.")
 
     if not template_name:
         raise HTTPException(status_code=400, detail="Template is required.")
@@ -441,12 +450,13 @@ async def create_job(
         "template": template_name,
         "anonymize": anonymize,
         "autofix": autofix,
+        "tailor": tailor,
         "size_bytes": source_path.stat().st_size if source_path.exists() else None,
     })
 
     thread = threading.Thread(
         target=_run_job,
-        args=(job.job_id, source_path, workdir, anonymize, autofix, template_name, source_key, client_ip, started_at),
+        args=(job.job_id, source_path, workdir, anonymize, autofix, tailor, jd_text, template_name, source_key, client_ip, started_at),
         daemon=True,
     )
     thread.start()
