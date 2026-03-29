@@ -100,31 +100,33 @@ def _slug_part(value: str) -> str:
 
 _degree_suffixes_re = re.compile(r',?\s*\b(PhD|Ph\.?D\.?|MD|M\.D\.?|DSc|D\.Sc\.?|Dr\.?)\b\.?', re.IGNORECASE)
 
-def _build_output_base_name(data: dict, anonymize: bool, fallback: str = "Converted") -> str:
+def _build_output_base_name(data: dict, anonymize: bool, tailor: bool = False, fallback: str = "Converted") -> str:
     basics = data.get("basics") or {}
     raw_name = str((basics.get("name") or data.get("name") or "")).strip()
     # Strip degree suffixes before building filename
     raw_name = _degree_suffixes_re.sub('', raw_name).strip()
     parts = [p for p in re.split(r"\s+", raw_name) if p]
 
+    suffix = "_tailored_a" if tailor and anonymize else "_tailored" if tailor else ""
+
     if len(parts) >= 2:
         first = _slug_part(parts[0])
         last = _slug_part(parts[-1])
         if anonymize:
             if first and last:
-                return f"CV_{first}_{last[:1]}"
+                return f"CV_{first}_{last[:1]}{suffix}"
             if first:
-                return f"CV_{first}"
+                return f"CV_{first}{suffix}"
         else:
             if first and last:
-                return f"CV_{first}_{last}"
+                return f"CV_{first}_{last}{suffix}"
             if first:
-                return f"CV_{first}"
+                return f"CV_{first}{suffix}"
 
     if len(parts) == 1:
         first = _slug_part(parts[0])
         if first:
-            return f"CV_{first}"
+            return f"CV_{first}{suffix}"
 
     fb = _slug_part(fallback) or "Converted"
     return f"CV_{fb}"
@@ -639,10 +641,11 @@ class QCVWebEngine:
         base_name: str,
         template_name: str,
         anonymize: bool = False,
+        tailor: bool = False,
         debug_cb: Optional[Callable[[str], None]] = None,
     ) -> Path:
         output_dir.mkdir(parents=True, exist_ok=True)
-        final_base_name = _build_output_base_name(data, anonymize, fallback=base_name)
+        final_base_name = _build_output_base_name(data, anonymize, tailor=tailor, fallback=base_name)
         result_path = output_dir / f"{final_base_name}.docx"
 
         if not hasattr(core, "generate_docx_from_json"):
@@ -795,7 +798,7 @@ class QCVWebEngine:
         )
 
         self._status(status_cb, "Generating DOCX", 90)
-        result_path = self._generate_docx(data, output_dir, source_path.stem, template_name, anonymize=anonymize, debug_cb=debug_cb)
+        result_path = self._generate_docx(data, output_dir, source_path.stem, template_name, anonymize=anonymize, tailor=tailor, debug_cb=debug_cb)
 
         self._status(status_cb, "Done", 100)
         return result_path
