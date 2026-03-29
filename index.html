@@ -695,12 +695,15 @@
         if (data.status === "Low Relevance") {
           stopPolling();
           const proceed = confirm(
-            "⚠️ This CV does not appear relevant to the provided Job Description.\n\n" +
+            "This CV does not appear relevant to the provided Job Description.\n\n" +
             "The candidate's background seems unrelated to the role requirements.\n\n" +
             "Do you want to tailor it anyway?"
           );
           if (proceed) {
             // Re-submit with force_tailor=true
+            errorText.textContent = "";
+            setStatus("Re-processing (forced)", 10);
+            setPrimaryAction("running");
             const formData = new FormData();
             formData.append("file", lastSubmittedFile);
             formData.append("template_name", templateSelect.value);
@@ -709,13 +712,11 @@
             formData.append("tailor", "true");
             formData.append("jd_text", jdText.value.trim());
             formData.append("force_tailor", "true");
-            // Re-run submission
             try {
               const r = await fetch("/jobs", { method: "POST", body: formData });
               const d = await r.json();
               if (!r.ok) throw new Error(d.detail || "Submission failed");
               activeJobId = d.job_id;
-              setStatus("Processing (forced)", 10);
               pollTimer = setInterval(() => pollJob(activeJobId), 1500);
             } catch (e) {
               errorText.textContent = e.message;
@@ -725,6 +726,7 @@
             setPrimaryAction("failed");
             setStatus("Cancelled", 0, "Tailoring cancelled — CV not relevant to JD.");
           }
+          return;
         }
       } catch (err) {
         pollErrorCount++;
