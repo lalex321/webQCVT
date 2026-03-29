@@ -334,7 +334,72 @@ def _is_nonempty_education_entry(entry) -> bool:
     return False
 
 
-def _build_content_details(data: dict, *, template_name: str, anonymize: bool, source_path: Path) -> dict:
+def _compute_jd_keyword_report(data: dict, jd_text: str) -> dict:
+    """Compare JD keywords against tailored CV to produce matched/missing/added report."""
+    stop = {'the', 'and', 'for', 'with', 'from', 'that', 'this', 'are', 'was', 'were',
+            'has', 'have', 'been', 'will', 'can', 'not', 'but', 'also', 'such', 'other',
+            'all', 'any', 'each', 'our', 'you', 'your', 'their', 'them', 'who', 'what',
+            'when', 'how', 'more', 'most', 'some', 'than', 'into', 'over', 'about',
+            'experience', 'years', 'role', 'work', 'working', 'strong', 'ability',
+            'team', 'teams', 'including', 'across', 'within', 'using', 'based',
+            'senior', 'junior', 'lead', 'manager', 'head', 'director', 'staff',
+            'full', 'high', 'time', 'level', 'new', 'key', 'well', 'good', 'best',
+            'systems', 'system', 'management', 'client', 'clients', 'project',
+            'projects', 'delivery', 'process', 'service', 'services', 'support',
+            'requirements', 'quality', 'development', 'performance', 'business',
+            'communication', 'skills', 'knowledge', 'solutions', 'environment'}
+
+    def _extract_words(text: str) -> set[str]:
+        return set(w.lower() for w in re.findall(r'[A-Za-z#+.]{3,}', text)) - stop
+
+    # JD keywords
+    jd_words = _extract_words(jd_text)
+
+    # CV keywords — broad scan across all text-bearing fields
+    cv_text_parts: list[str] = []
+    cv_text_parts.append(str(data.get("basics", {}).get("current_title", "")))
+    for bullet in (data.get("summary") or []):
+        cv_text_parts.append(str(bullet))
+    for cat, items in (data.get("skills") or {}).items():
+        cv_text_parts.append(cat)
+        if isinstance(items, list):
+            cv_text_parts.extend(str(s) for s in items)
+    for exp in (data.get("experience") or []):
+        cv_text_parts.append(str(exp.get("role", "")))
+        cv_text_parts.append(str(exp.get("company", "")))
+        for acc in (exp.get("accomplishments") or []):
+            cv_text_parts.append(str(acc))
+        for env_item in (exp.get("environment") or []):
+            cv_text_parts.append(str(env_item))
+    for edu in (data.get("education") or []):
+        if isinstance(edu, dict):
+            cv_text_parts.append(str(edu.get("degree", "")))
+            cv_text_parts.append(str(edu.get("field", "")))
+    for cert in (data.get("certifications") or []):
+        cv_text_parts.append(str(cert))
+
+    cv_words = set()
+    for part in cv_text_parts:
+        cv_words |= _extract_words(part)
+
+    matched = sorted(jd_words & cv_words)
+    missing = sorted(jd_words - cv_words)
+    added = sorted(cv_words - jd_words)
+
+    jd_count = len(jd_words)
+    match_pct = round(len(matched) / jd_count * 100) if jd_count else 0
+
+    return {
+        "matched": matched,
+        "missing": missing,
+        "added": added,
+        "jd_keyword_count": jd_count,
+        "cv_keyword_count": len(cv_words),
+        "match_pct": match_pct,
+    }
+
+
+def _build_content_details(data: dict, *, template_name: str, anonymize: bool, source_path: Path, jd_text: str = "") -> dict:
     basics = data.get("basics") or {}
     summary_count = _count_summary_bullets(data)
     skill_group_count = _count_skill_groups(data)
@@ -397,7 +462,7 @@ def _build_content_details(data: dict, *, template_name: str, anonymize: bool, s
     if anonymize:
         notes.append("Personal contact details were removed or generalized for anonymized output.")
 
-    return {
+    result = {
         "current_title_present": bool(current_title),
         "summary_bullet_count": summary_count,
         "skill_group_count": skill_group_count,
@@ -413,6 +478,9 @@ def _build_content_details(data: dict, *, template_name: str, anonymize: bool, s
         "template_name": template_name,
         "source_suffix": source_path.suffix.lower(),
     }
+    if jd_text.strip():
+        result["jd_keyword_report"] = _compute_jd_keyword_report(data, jd_text)
+    return result
 
 def _translate_non_english(data: dict) -> None:
     """Translate non-English content via LLM (no-op if all English)."""
@@ -879,6 +947,7 @@ class QCVWebEngine:
                     raise LowRelevanceError("This CV does not appear relevant to the provided Job Description.")
             self._status(status_cb, "Tailoring to JD", 70)
             data = self._apply_tailor(data, jd_text)
+            self._last_tailored_json = copy.deepcopy(data)
 
         if anonymize:
             self._status(status_cb, "Anonymizing", 75)
@@ -889,10 +958,68 @@ class QCVWebEngine:
             template_name=template_name,
             anonymize=anonymize,
             source_path=source_path,
+            jd_text=jd_text if tailor else "",
         )
 
         self._status(status_cb, "Generating DOCX", 90)
         result_path = self._generate_docx(data, output_dir, source_path.stem, template_name, anonymize=anonymize, tailor=tailor, debug_cb=debug_cb)
+
+        self._status(status_cb, "Done", 100)
+        return result_path
+
+    def refine(
+        self,
+        tailored_json: dict,
+        jd_text: str,
+        missing_keywords: list[str],
+        output_dir: Path,
+        *,
+        anonymize: bool = False,
+        template_name: str,
+        source_name: str = "refined",
+        status_cb: Optional[StatusCallback] = None,
+        debug_cb: Optional[Callable[[str], None]] = None,
+    ) -> Path:
+        """Second-pass refinement: weave missing JD keywords into already-tailored CV."""
+        self.last_content_details = None
+        self.config = core.load_config()
+        self.model_name = choose_model_name(self.config)
+        api_key = resolve_api_key(self.app_dir, self.config)
+        configure_gemini(api_key)
+
+        self._status(status_cb, "Refining", 20)
+
+        prompt_template = self.config.get("prompt_refine", core.DEFAULT_PROMPTS.get("prompt_refine", ""))
+        if not prompt_template:
+            raise RuntimeError("prompt_refine not configured")
+
+        input_json_str = json.dumps(tailored_json, ensure_ascii=False)
+        prompt = (prompt_template
+                  .replace("{jd_text}", jd_text)
+                  .replace("{missing_keywords}", ", ".join(missing_keywords))
+                  .replace("{input_json_str}", input_json_str))
+
+        self._status(status_cb, "Refining (LLM)", 40)
+        raw_data = call_llm_json(prompt, self.model_name)
+        data = raw_data.get("cv", raw_data) if isinstance(raw_data, dict) else raw_data
+        if hasattr(core, "sanitize_json"):
+            data = core.sanitize_json(data)
+        self._last_tailored_json = copy.deepcopy(data)
+
+        if anonymize:
+            self._status(status_cb, "Anonymizing", 70)
+            data = self._apply_anonymization(data)
+
+        self.last_content_details = _build_content_details(
+            data,
+            template_name=template_name,
+            anonymize=anonymize,
+            source_path=Path(source_name),
+            jd_text=jd_text,
+        )
+
+        self._status(status_cb, "Generating DOCX", 85)
+        result_path = self._generate_docx(data, output_dir, Path(source_name).stem, template_name, anonymize=anonymize, tailor=True, debug_cb=debug_cb)
 
         self._status(status_cb, "Done", 100)
         return result_path

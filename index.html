@@ -287,6 +287,11 @@
       font-weight:900;
       letter-spacing:-.03em;
     }
+    .modal-head-actions{
+      display:flex;
+      align-items:center;
+      gap:8px;
+    }
     .modal-close{
       border:1px solid #cfd8e3;
       background:#fff;
@@ -317,6 +322,24 @@
       background:#e2e8f0;
       margin:10px 0 8px;
     }
+    .refine-bar{
+      display:flex;
+      align-items:center;
+      gap:8px;
+    }
+    .refine-btn{
+      background:#4f46e5;
+      color:#fff;
+      border:none;
+      padding:7px 16px;
+      border-radius:8px;
+      font-size:13px;
+      font-weight:600;
+      cursor:pointer;
+    }
+    .refine-btn:hover{background:#4338ca}
+    .refine-btn:disabled{background:#a5b4fc;cursor:not-allowed}
+    .refine-status{font-size:12px;color:#64748b}
     @media (max-width: 600px){
       .shell{grid-template-columns:1fr}
       .right{border-left:0;border-top:1px solid var(--line)}
@@ -409,9 +432,15 @@
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="detailsTitle">
       <div class="modal-head">
         <div>
-          <h2 id="detailsTitle" class="modal-title">Processing details</h2>
+          <h2 id="detailsTitle" class="modal-title">JD keyword match</h2>
         </div>
-        <button id="detailsCloseBtn" class="modal-close" type="button">Close</button>
+        <div class="modal-head-actions">
+          <div id="refineBar" class="refine-bar hidden">
+            <button id="refineBtn" class="refine-btn" type="button">Refine</button>
+            <span id="refineStatus" class="refine-status"></span>
+          </div>
+          <button id="detailsCloseBtn" class="modal-close" type="button">Close</button>
+        </div>
       </div>
       <ul id="detailsList" class="details-list"></ul>
     </div>
@@ -461,8 +490,12 @@
     const detailsModal = document.getElementById("detailsModal");
     const detailsCloseBtn = document.getElementById("detailsCloseBtn");
     const detailsList = document.getElementById("detailsList");
+    const refineBar = document.getElementById("refineBar");
+    const refineBtn = document.getElementById("refineBtn");
+    const refineStatus = document.getElementById("refineStatus");
 
     let activeJobId = null;
+    let jobRefined = false;
     let lastSubmittedFile = null;
     let detailsLines = [];
     let detailsPayload = null;
@@ -568,35 +601,60 @@
       return lines;
     }
 
+    function buildJdKeywordSection(details) {
+      const cd = details && details.content_details ? details.content_details : null;
+      const rpt = cd && cd.jd_keyword_report ? cd.jd_keyword_report : null;
+      if (!rpt) return null;
+      return rpt;
+    }
+
     function renderDetails() {
       detailsList.innerHTML = "";
 
       const effectiveDetails = detailsPayload || {};
-      const notes = buildUserFacingNotes(effectiveDetails);
-      const summaryLines = buildContentSummaryLines(effectiveDetails);
-      const technicalLines = buildCompactTechnicalLines(effectiveDetails);
-      const fallbackLines = !notes.length && !summaryLines.length && !technicalLines.length ? detailsLines : [];
+      const jdReport = buildJdKeywordSection(effectiveDetails);
 
-      if (notes.length) {
-        appendSectionTitle("Content notes");
-        for (const line of notes) appendListItem(line);
+      if (jdReport) {
+        appendSectionTitle(`JD keyword match — ${jdReport.match_pct}%`);
+        if (jdReport.matched.length) {
+          appendListItem(`Matched (${jdReport.matched.length}): ${jdReport.matched.join(", ")}`);
+        }
+        if (jdReport.missing.length) {
+          appendListItem(`Missing from CV (${jdReport.missing.length}): ${jdReport.missing.join(", ")}`);
+        }
+        if (jdReport.added.length) {
+          const maxShow = 30;
+          const shown = jdReport.added.slice(0, maxShow).join(", ");
+          const suffix = jdReport.added.length > maxShow ? ` … and ${jdReport.added.length - maxShow} more` : "";
+          appendListItem(`CV extras (${jdReport.added.length}): ${shown}${suffix}`);
+        }
+      } else {
+        // Fallback for non-tailor jobs
+        const technicalLines = buildCompactTechnicalLines(effectiveDetails);
+        const notes = buildUserFacingNotes(effectiveDetails);
+        const fallbackLines = !notes.length && !technicalLines.length ? detailsLines : [];
+        if (notes.length) {
+          appendSectionTitle("Content notes");
+          for (const line of notes) appendListItem(line);
+        }
+        if (technicalLines.length) {
+          if (notes.length) appendDivider();
+          appendSectionTitle("Technical details");
+          for (const line of technicalLines) appendListItem(line);
+        }
+        if (fallbackLines.length) {
+          appendSectionTitle("Technical details");
+          for (const line of fallbackLines) appendListItem(line);
+        }
       }
 
-      if (summaryLines.length) {
-        if (notes.length) appendDivider();
-        appendSectionTitle("Included content");
-        for (const line of summaryLines) appendListItem(line);
-      }
-
-      if (technicalLines.length) {
-        if (notes.length || summaryLines.length) appendDivider();
-        appendSectionTitle("Technical details");
-        for (const line of technicalLines) appendListItem(line);
-      }
-
-      if (fallbackLines.length) {
-        appendSectionTitle("Technical details");
-        for (const line of fallbackLines) appendListItem(line);
+      // Show refine button only on first pass when there are missing JD keywords
+      if (!jobRefined && jdReport && jdReport.missing && jdReport.missing.length > 0) {
+        refineBar.classList.remove("hidden");
+        refineBtn.disabled = false;
+        refineStatus.textContent = "";
+      } else {
+        refineBar.classList.add("hidden");
       }
     }
 
@@ -723,8 +781,16 @@
 
         if (data.ready) {
           stopPolling();
-          detailsBtn.classList.remove("hidden");
           setPrimaryAction("done", `/jobs/${jobId}/download`);
+          // Show details link + auto-open modal only when there are missing JD keywords
+          const cd = (data.details || {}).content_details || {};
+          const kwReport = cd.jd_keyword_report;
+          if (kwReport && kwReport.missing && kwReport.missing.length > 0) {
+            detailsBtn.classList.remove("hidden");
+            openDetailsModal();
+          } else {
+            detailsBtn.classList.add("hidden");
+          }
           return;
         }
 
@@ -781,6 +847,33 @@
 
     detailsBtn.addEventListener("click", openDetailsModal);
     detailsCloseBtn.addEventListener("click", closeDetailsModal);
+
+    refineBtn.addEventListener("click", async () => {
+      if (!activeJobId) return;
+      refineBtn.disabled = true;
+      refineStatus.textContent = "Starting…";
+      try {
+        const resp = await fetch(`/jobs/${activeJobId}/refine`, { method: "POST" });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          refineStatus.textContent = err.detail || "Refine failed";
+          refineBtn.disabled = false;
+          return;
+        }
+        refineStatus.textContent = "Refining…";
+        jobRefined = true;
+        closeDetailsModal();
+        // Resume polling to track refine progress
+        setStatus("Refining", 10, "");
+        setPrimaryAction("running");
+        detailsBtn.classList.add("hidden");
+        stopPolling();
+        pollTimer = setInterval(() => pollJob(activeJobId), 1500);
+      } catch (e) {
+        refineStatus.textContent = e.message || "Network error";
+        refineBtn.disabled = false;
+      }
+    });
     detailsModal.addEventListener("click", (e) => {
       if (e.target === detailsModal) closeDetailsModal();
     });
@@ -849,6 +942,7 @@
         }
         const data = await res.json();
         activeJobId = data.job_id;
+        jobRefined = false;
         detailsPayload = data.details || detailsPayload;
         setStatus(data.status, data.progress, "");
         pollTimer = setInterval(() => pollJob(activeJobId), 1500);

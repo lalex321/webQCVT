@@ -380,6 +380,12 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
                 content_details=getattr(job_engine, "last_content_details", None),
             )
             setattr(job, "details", details)
+            # Store data for potential refine pass
+            if tailor and jd_text.strip():
+                setattr(job, "_tailored_json", getattr(job_engine, "_last_tailored_json", None))
+                setattr(job, "_jd_text", jd_text)
+                setattr(job, "_output_dir", str(workdir))
+                setattr(job, "_source_name", source_path.name)
 
         jobs.update(job_id, status="Done", progress=100, result_path=str(result_path))
         append_usage({
@@ -537,3 +543,86 @@ def download_job_result(job_id: str):
         filename=result_path.name,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+
+
+def _run_refine(job_id: str, tailored_json: dict, jd_text: str, missing_keywords: list[str],
+                output_dir: str, anonymize: bool, template_name: str, source_name: str,
+                client_ip: str, started_at: float) -> None:
+    try:
+        def cb(status: str, progress: int) -> None:
+            jobs.update(job_id, status=status, progress=progress)
+
+        def dbg(text: str) -> None:
+            jobs.update(job_id, debug=text)
+
+        engine = QCVWebEngine(TEMPLATES_DIR)
+        result_path = engine.refine(
+            tailored_json=tailored_json,
+            jd_text=jd_text,
+            missing_keywords=missing_keywords,
+            output_dir=Path(output_dir),
+            anonymize=anonymize,
+            template_name=template_name,
+            source_name=source_name,
+            status_cb=cb,
+            debug_cb=dbg,
+        )
+
+        job = jobs.get(job_id)
+        if job:
+            details = _build_processing_details(
+                source_name=source_name,
+                source_path=Path(source_name),
+                template_name=template_name,
+                anonymize=anonymize,
+                autofix=False,
+                output_path=result_path,
+                content_details=getattr(engine, "last_content_details", None),
+            )
+            setattr(job, "details", details)
+            # Update stored tailored JSON for potential further refines
+            setattr(job, "_tailored_json", getattr(engine, "_last_tailored_json", None) or tailored_json)
+
+        jobs.update(job_id, status="Done", progress=100, result_path=str(result_path))
+    except Exception as e:
+        jobs.update(job_id, status="Failed", progress=100, error=str(e))
+
+
+@app.post("/jobs/{job_id}/refine")
+async def refine_job(job_id: str, request: Request):
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "Done":
+        raise HTTPException(status_code=400, detail="Job must be in Done state to refine")
+
+    tailored_json = getattr(job, "_tailored_json", None)
+    jd_text = getattr(job, "_jd_text", None)
+    output_dir = getattr(job, "_output_dir", None)
+    source_name = getattr(job, "_source_name", "refined")
+
+    if not tailored_json or not jd_text:
+        raise HTTPException(status_code=400, detail="No tailoring data available for this job")
+
+    # Get missing keywords from current keyword report
+    details = getattr(job, "details", None) or {}
+    cd = details.get("content_details") or {}
+    kw_report = cd.get("jd_keyword_report") or {}
+    missing = kw_report.get("missing", [])
+    if not missing:
+        raise HTTPException(status_code=400, detail="No missing keywords to refine")
+
+    # Reset job status for refine pass — clear result_path so polling doesn't see it as ready
+    jobs.update(job_id, status="Refining", progress=0, error=None, result_path="")
+
+    client_ip = request.client.host if request.client else "unknown"
+    thread = threading.Thread(
+        target=_run_refine,
+        args=(job_id, tailored_json, jd_text, missing, output_dir,
+              job.anonymize, job.template_name, source_name,
+              client_ip, time.time()),
+        daemon=True,
+    )
+    thread.start()
+
+    return {"job_id": job_id, "status": "Refining"}
