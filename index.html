@@ -570,12 +570,14 @@
           <button class="cv-tab" data-tab="work" type="button">Work</button>
           <button class="cv-tab" data-tab="skills" type="button">Skills</button>
           <button class="cv-tab" data-tab="other" type="button">Education & Languages</button>
+          <button class="cv-tab" data-tab="extra" type="button">Other Sections</button>
         </div>
         <div id="cvPaneBasics" class="cv-tab-pane active"></div>
         <div id="cvPaneSummary" class="cv-tab-pane"></div>
         <div id="cvPaneWork" class="cv-tab-pane"></div>
         <div id="cvPaneSkills" class="cv-tab-pane"></div>
         <div id="cvPaneOther" class="cv-tab-pane"></div>
+        <div id="cvPaneExtra" class="cv-tab-pane"></div>
         <div style="margin-top:14px;padding-top:14px;border-top:1px solid #e2e8f0;display:flex;gap:10px">
           <button id="reanalyzeBtn" class="primary" type="button" style="font-size:13px;padding:10px 20px">Save &amp; Re-analyze Fit</button>
           <span id="reanalyzeStatus" style="font-size:12px;color:#64748b;align-self:center"></span>
@@ -665,6 +667,7 @@
     let currentGapData = null;
     let preloadedFitJson = null;
     let jobRefined = false;
+    let lastAnalyzedJd = "";
     let lastSubmittedFile = null;
     let detailsLines = [];
     let detailsPayload = null;
@@ -947,6 +950,7 @@
 
     function renderGapAnalysis(gap, savedEdits) {
       currentGapData = gap;
+      lastAnalyzedJd = jdText.value;
       const pct = gap.match_percentage || 0;
       const tier = pct >= 70 ? "high" : pct >= 40 ? "medium" : "low";
       gapMatchRing.className = "gap-match-ring " + tier;
@@ -1077,7 +1081,7 @@
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       const baseName = (currentGapData && currentGapData._output_base) || "cv";
-      a.download = baseName + ".json";
+      a.download = baseName + "_fit.json";
       a.click();
       URL.revokeObjectURL(a.href);
       gapDownloadBtn.disabled = false;
@@ -1109,6 +1113,15 @@
             if (fitSession.gap_analysis) {
               renderGapAnalysis(fitSession.gap_analysis, fitSession.user_edits);
             }
+            /* Load CV editor from the uploaded JSON */
+            const cvClean = Object.assign({}, raw);
+            delete cvClean._fit_session;
+            delete cvClean._output_base;
+            cvData = cvClean;
+            cvDataOrig = JSON.parse(JSON.stringify(cvClean));
+            cvDirty = false;
+            cvEditorPanel.classList.remove("hidden");
+            renderCvTab("basics");
             updateBtnLabel();
           }
         } catch (err) {
@@ -1223,6 +1236,7 @@
         case "work": renderWorkTab(); break;
         case "skills": renderSkillsTab(); break;
         case "other": renderOtherTab(); break;
+        case "extra": renderExtraTab(); break;
       }
     }
 
@@ -1357,9 +1371,17 @@
       });
       h += '</tbody></table><button class="cv-ed-btn" data-action="add-lang" type="button" style="margin-top:8px">+ Language</button>';
 
-      /* Certifications */
+      pane.innerHTML = h;
+    }
+
+    function renderExtraTab() {
+      const pane = document.getElementById("cvPaneExtra");
+      const others = cvData.other_sections || [];
       const certs = cvData.certifications || [];
-      h += '<h3 style="font-size:14px;font-weight:800;margin:24px 0 8px;color:#334155">Certifications</h3>' +
+      let h = '';
+
+      /* Certifications */
+      h += '<h3 style="font-size:14px;font-weight:800;margin:0 0 8px;color:#334155">Certifications</h3>' +
         '<ul class="cv-ed-highlights">';
       certs.forEach(function(c, i) {
         h += '<li style="display:flex;gap:6px;align-items:center">' +
@@ -1369,23 +1391,20 @@
       h += '</ul><button class="cv-ed-btn" data-action="add-cert" type="button" style="margin-top:4px">+ Certification</button>';
 
       /* Other Sections */
-      const others = cvData.other_sections || [];
-      if (others.length) {
-        h += '<h3 style="font-size:14px;font-weight:800;margin:24px 0 8px;color:#334155">Other Sections</h3>';
-        others.forEach(function(sec, si) {
-          h += '<div style="margin-bottom:12px">' +
-            '<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">' +
-            '<strong class="cv-ed-cell" contenteditable data-path="other_sections.' + si + '.title" style="font-size:13px">' + escHtml(sec.title || "") + '</strong>' +
-            '<button class="cv-ed-btn danger" data-action="del-other" data-idx="' + si + '" type="button" style="font-size:11px">- Section</button></div>' +
-            '<ul class="cv-ed-highlights">';
-          (sec.items || []).forEach(function(item, ii) {
-            h += '<li style="display:flex;gap:6px;align-items:center">' +
-              '<span class="cv-ed-cell" contenteditable data-path="other_sections.' + si + '.items.' + ii + '" style="flex:1">' + escHtml(item) + '</span>' +
-              '<button class="cv-ed-btn danger" data-action="del-other-item" data-idx="' + si + '" data-ii="' + ii + '" type="button" style="flex:none">-</button></li>';
-          });
-          h += '</ul><button class="cv-ed-btn" data-action="add-other-item" data-idx="' + si + '" type="button" style="margin-top:4px">+ Item</button></div>';
+      h += '<h3 style="font-size:14px;font-weight:800;margin:24px 0 8px;color:#334155">Other Sections</h3>';
+      others.forEach(function(sec, si) {
+        h += '<div style="margin-bottom:12px">' +
+          '<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">' +
+          '<strong class="cv-ed-cell" contenteditable data-path="other_sections.' + si + '.title" style="font-size:13px">' + escHtml(sec.title || "") + '</strong>' +
+          '<button class="cv-ed-btn danger" data-action="del-other" data-idx="' + si + '" type="button" style="font-size:11px">- Section</button></div>' +
+          '<ul class="cv-ed-highlights">';
+        (sec.items || []).forEach(function(item, ii) {
+          h += '<li style="display:flex;gap:6px;align-items:center">' +
+            '<span class="cv-ed-cell" contenteditable data-path="other_sections.' + si + '.items.' + ii + '" style="flex:1">' + escHtml(item) + '</span>' +
+            '<button class="cv-ed-btn danger" data-action="del-other-item" data-idx="' + si + '" data-ii="' + ii + '" type="button" style="flex:none">-</button></li>';
         });
-      }
+        h += '</ul><button class="cv-ed-btn" data-action="add-other-item" data-idx="' + si + '" type="button" style="margin-top:4px">+ Item</button></div>';
+      });
       h += '<button class="cv-ed-btn" data-action="add-other" type="button" style="margin-top:8px">+ Other Section</button>';
 
       pane.innerHTML = h;
@@ -1533,32 +1552,32 @@
         const c = (cvData.certifications || [])[idx];
         if (c && !confirm('Delete "' + c + '"?')) return;
         cvData.certifications.splice(idx, 1);
-        markCvDirty(); renderOtherTab(); return;
+        markCvDirty(); renderExtraTab(); return;
       }
       if (action === "add-cert") {
         if (!cvData.certifications) cvData.certifications = [];
         cvData.certifications.push("");
-        markCvDirty(); renderOtherTab(); return;
+        markCvDirty(); renderExtraTab(); return;
       }
       if (action === "del-other") {
         const sec = (cvData.other_sections || [])[idx];
         if (sec && sec.title && !confirm('Delete section "' + sec.title + '"?')) return;
         cvData.other_sections.splice(idx, 1);
-        markCvDirty(); renderOtherTab(); return;
+        markCvDirty(); renderExtraTab(); return;
       }
       if (action === "add-other") {
         if (!cvData.other_sections) cvData.other_sections = [];
         cvData.other_sections.push({title:"",items:[]});
-        markCvDirty(); renderOtherTab(); return;
+        markCvDirty(); renderExtraTab(); return;
       }
       if (action === "del-other-item") {
         const ii = parseInt(btn.dataset.ii);
         cvData.other_sections[idx].items.splice(ii, 1);
-        markCvDirty(); renderOtherTab(); return;
+        markCvDirty(); renderExtraTab(); return;
       }
       if (action === "add-other-item") {
         cvData.other_sections[idx].items.push("");
-        markCvDirty(); renderOtherTab(); return;
+        markCvDirty(); renderExtraTab(); return;
       }
       if (action === "del-link") {
         cvData.basics.links.splice(idx, 1);
@@ -1786,6 +1805,16 @@
     jdText.addEventListener("blur", () => {
       jdText.classList.add("jd-collapsed");
       localStorage.setItem(STORAGE_KEYS.jd_text, jdText.value);
+    });
+    jdText.addEventListener("input", () => {
+      if (hasGapData && jdText.value !== lastAnalyzedJd) {
+        gapPanel.classList.add("hidden");
+        hasGapData = false;
+        gapAnalysisReady = false;
+        generateBtn.disabled = false;
+        generateBtn.classList.remove("hidden");
+        updateBtnLabel();
+      }
     });
     templateSelect.addEventListener("change", () => {
       savePrefs();
