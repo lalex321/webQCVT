@@ -17,7 +17,7 @@ from html import escape
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from converter_engine import InMemoryJobStore, LowRelevanceError, QCVWebEngine, make_temp_workspace, resolve_api_key
+from converter_engine import InMemoryJobStore, LowRelevanceError, QCVWebEngine, make_temp_workspace, resolve_api_key, _build_output_base_name, choose_model_name, configure_gemini
 import cv_engine as _core
 
 APP_DIR = Path(__file__).resolve().parent
@@ -398,11 +398,11 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
         )
 
         # Store base CV JSON on job for download
+        job = jobs.get(job_id)
         base_json = getattr(job_engine, "_last_base_json", None)
         if base_json and job:
             setattr(job, "_cv_json", base_json)
 
-        job = jobs.get(job_id)
         if job:
             details = _build_processing_details(
                 source_name=getattr(job, "filename", source_path.name),
@@ -616,6 +616,33 @@ async def update_cv_json(job_id: str, request: Request):
     body = await request.json()
     setattr(job, "_cv_json", body)
     return {"ok": True}
+
+
+@app.post("/jobs/{job_id}/reanalyze")
+async def reanalyze_job(job_id: str, request: Request):
+    """Re-run gap analysis on the (possibly edited) CV JSON."""
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    cv_json = getattr(job, "_cv_json", None)
+    if not cv_json:
+        raise HTTPException(status_code=400, detail="No CV JSON available")
+    body = await request.json()
+    jd_text = body.get("jd_text", "")
+    if not jd_text.strip():
+        raise HTTPException(status_code=400, detail="Job description is required")
+
+    engine = QCVWebEngine(TEMPLATES_DIR)
+    engine.config = _core.load_config()
+    engine.model_name = choose_model_name(engine.config)
+    api_key = resolve_api_key(engine.app_dir, engine.config)
+    configure_gemini(api_key)
+
+    gap_result = engine._analyze_gap(cv_json, jd_text)
+    gap_result["_output_base"] = _build_output_base_name(cv_json, getattr(job, "anonymize", False), True)
+
+    setattr(job, "_gap_analysis", gap_result)
+    return gap_result
 
 
 @app.get("/jobs/{job_id}/download")
