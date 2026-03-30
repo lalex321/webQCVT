@@ -345,7 +345,7 @@ def _build_processing_details(
     return details
 
 
-def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float) -> None:
+def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float, skip_gap: bool = False, preloaded_focus_skills: list | None = None, preloaded_candidate_notes: dict | None = None) -> None:
     try:
         def cb(status: str, progress: int) -> None:
             jobs.update(job_id, status=status, progress=progress)
@@ -353,10 +353,10 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
         def dbg(text: str) -> None:
             jobs.update(job_id, debug=text)
 
-        # Create pause event for gap analysis (tailor jobs only)
+        # Create pause event for gap analysis (tailor jobs only, unless skip_gap)
         pause_event = None
         gap_ready_cb = None
-        if tailor and jd_text.strip():
+        if tailor and jd_text.strip() and not skip_gap:
             import threading
             pause_event = threading.Event()
 
@@ -369,6 +369,19 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             def focus_skills_cb() -> list:
                 job = jobs.get(job_id)
                 return getattr(job, "_focus_skills", []) if job else []
+
+            def candidate_notes_cb() -> dict:
+                job = jobs.get(job_id)
+                return getattr(job, "_candidate_notes", {}) if job else {}
+
+        # skip_gap: pre-fill focus_skills and candidate_notes, no pause
+        if skip_gap and tailor:
+            _preloaded_fs = preloaded_focus_skills or []
+            _preloaded_cn = preloaded_candidate_notes or {}
+            def focus_skills_cb() -> list:
+                return _preloaded_fs
+            def candidate_notes_cb() -> dict:
+                return _preloaded_cn
 
         job_engine = QCVWebEngine(TEMPLATES_DIR)
         result_path = job_engine.process(
@@ -385,7 +398,8 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             debug_cb=dbg,
             pause_event=pause_event,
             gap_ready_cb=gap_ready_cb,
-            focus_skills_cb=focus_skills_cb if pause_event else None,
+            focus_skills_cb=focus_skills_cb if (pause_event or skip_gap) else None,
+            candidate_notes_cb=candidate_notes_cb if (pause_event or skip_gap) else None,
         )
 
         job = jobs.get(job_id)
@@ -453,6 +467,9 @@ async def create_job(
     jd_text: str = Form(""),
     template_name: str = Form(...),
     force_tailor: bool = Form(False),
+    skip_gap: bool = Form(False),
+    focus_skills_json: str = Form(""),
+    candidate_notes_json: str = Form(""),
 ):
     suffix = Path(file.filename or "upload.docx").suffix.lower()
     if suffix not in {".pdf", ".docx", ".png", ".jpg", ".jpeg"}:
@@ -513,7 +530,11 @@ async def create_job(
 
     thread = threading.Thread(
         target=_run_job,
-        args=(job.job_id, source_path, workdir, anonymize, autofix, tailor, jd_text, force_tailor, template_name, source_key, client_ip, started_at),
+        args=(job.job_id, source_path, workdir, anonymize, autofix, tailor, jd_text, force_tailor, template_name, source_key, client_ip, started_at, skip_gap),
+        kwargs={
+            "preloaded_focus_skills": json.loads(focus_skills_json) if focus_skills_json else None,
+            "preloaded_candidate_notes": json.loads(candidate_notes_json) if candidate_notes_json else None,
+        },
         daemon=True,
     )
     thread.start()
@@ -673,6 +694,9 @@ async def continue_job(job_id: str, request: Request):
         focus_skills = []
     if focus_skills:
         setattr(job, "_focus_skills", focus_skills)
+    candidate_notes = body.get("candidate_notes", {}) if isinstance(body, dict) else {}
+    if candidate_notes:
+        setattr(job, "_candidate_notes", candidate_notes)
 
     pause_event.set()
     return {"job_id": job_id, "status": "Resuming"}

@@ -379,6 +379,12 @@
     .gap-status.covered{background:#dcfce7;color:#16a34a}
     .gap-status.partial{background:#fef3c7;color:#d97706}
     .gap-status.missing{background:#fee2e2;color:#dc2626}
+    .gap-status.edited{background:#dbeafe;color:#2563eb}
+    .gap-rec-editable{outline:none;cursor:text;border-radius:6px;padding:2px 4px;transition:background .2s}
+    .gap-rec-editable:hover{background:#f1f5f9}
+    .gap-rec-editable:focus{background:#eff6ff;box-shadow:inset 0 0 0 1px #93c5fd}
+    .gap-download-btn{background:none;border:1px solid #94a3b8;color:#475569;border-radius:12px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer;min-width:auto;float:right}
+    .gap-download-btn:hover{background:#f1f5f9;border-color:#64748b}
     .gap-skill-cb{margin-right:6px;vertical-align:middle;cursor:pointer}
     .gap-title-row{margin-bottom:10px}
     .gap-title{margin:0;font-size:17px;font-weight:800;letter-spacing:-.02em;color:var(--text)}
@@ -467,6 +473,10 @@
               <label><input id="tailor" type="checkbox" /> Tailor to JD</label>
             </div>
           </div>
+          <div id="fitJsonField" class="field hidden">
+            <label for="fitJsonFile">Fit Report JSON (optional)</label>
+            <input id="fitJsonFile" type="file" accept=".json" />
+          </div>
           <div class="action-row">
             <button id="generateBtn" class="primary" type="submit">Convert</button>
             <a id="topDownloadLink" class="secondary hidden" href="#">Download</a>
@@ -495,8 +505,9 @@
     </div>
 
     <div id="gapPanel" class="gap-panel hidden">
-      <div class="gap-title-row">
+      <div class="gap-title-row" style="display:flex;align-items:center;justify-content:space-between">
         <h2 class="gap-title">Fit Report</h2>
+        <button type="button" class="gap-download-btn" id="gapDownloadBtn">Download JSON</button>
       </div>
       <div class="gap-header">
         <div id="gapMatchRing" class="gap-match-ring"></div>
@@ -572,6 +583,9 @@
     const tailorInput = document.getElementById("tailor");
     const jdField = document.getElementById("jdField");
     const jdText = document.getElementById("jdText");
+    const fitJsonField = document.getElementById("fitJsonField");
+    const fitJsonFile = document.getElementById("fitJsonFile");
+    const gapDownloadBtn = document.getElementById("gapDownloadBtn");
     const generateBtn = document.getElementById("generateBtn");
     const topDownloadLink = document.getElementById("topDownloadLink");
 
@@ -597,6 +611,8 @@
     let activeJobId = null;
     let gapAnalysisReady = false;
     let hasGapData = false;
+    let currentGapData = null;
+    let preloadedFitJson = null;
     let jobRefined = false;
     let lastSubmittedFile = null;
     let detailsLines = [];
@@ -782,6 +798,7 @@
       anonymizeInput.checked = localStorage.getItem(STORAGE_KEYS.anonymize) === "1";
       tailorInput.checked = localStorage.getItem(STORAGE_KEYS.tailor) === "1";
       jdField.classList.toggle("hidden", !tailorInput.checked);
+      fitJsonField.classList.toggle("hidden", !tailorInput.checked);
       document.getElementById("pageRoot").classList.toggle("tailor-mode", tailorInput.checked);
       jdText.value = localStorage.getItem(STORAGE_KEYS.jd_text) || "";
     }
@@ -872,9 +889,11 @@
       gapPanel.classList.add("hidden");
       gapAnalysisReady = false;
       hasGapData = false;
+      currentGapData = null;
     }
 
-    function renderGapAnalysis(gap) {
+    function renderGapAnalysis(gap, savedEdits) {
+      currentGapData = gap;
       const pct = gap.match_percentage || 0;
       const tier = pct >= 70 ? "high" : pct >= 40 ? "medium" : "low";
       gapMatchRing.className = "gap-match-ring " + tier;
@@ -902,19 +921,52 @@
         const sb = (b.status || "").toLowerCase().replace(/\s+/g, "");
         return (statusOrder[sa] ?? 3) - (statusOrder[sb] ?? 3);
       });
+      const savedNotes = savedEdits ? savedEdits.candidate_notes || {} : {};
+      const savedChecked = savedEdits ? new Set(savedEdits.checked_skills || []) : null;
       sortedSkills.forEach(function(row) {
         const tr = document.createElement("tr");
         const status = (row.status || "").toLowerCase().replace(/\s+/g, "");
         const isGap = status === "partial" || status === "missing";
-        const isChecked = status === "partial" ? " checked" : "";
+        const reqName = row.requirement || "";
+        const hasNote = savedNotes.hasOwnProperty(reqName);
+        /* Determine checked state: from saved edits or default */
+        let checked = false;
+        if (savedChecked) {
+          checked = savedChecked.has(reqName);
+        } else {
+          checked = status === "partial";
+        }
+        const isChecked = checked ? " checked" : "";
         const cbHtml = isGap
-          ? '<input type="checkbox" class="gap-skill-cb" data-skill="' + escHtml(row.requirement || "") + '"' + isChecked + ' /> '
+          ? '<input type="checkbox" class="gap-skill-cb" data-skill="' + escHtml(reqName) + '"' + isChecked + ' /> '
           : "";
+        const recEditable = isGap
+          ? ' contenteditable="true" spellcheck="true" lang="en-US" class="gap-rec-editable" data-orig="' + escHtml(row.recommendation || "") + '"'
+          : "";
+        const recText = hasNote ? savedNotes[reqName] : (row.recommendation || "");
+        const displayStatus = hasNote ? "edited" : status;
+        const displayLabel = hasNote ? "Edited" : (row.status || "");
         tr.innerHTML =
-          "<td>" + cbHtml + escHtml(row.requirement || "") + "</td>" +
+          "<td>" + cbHtml + escHtml(reqName) + "</td>" +
           "<td>" + escHtml(row.category || "") + "</td>" +
-          '<td><span class="gap-status ' + status + '">' + escHtml(row.status || "") + '</span></td>' +
-          "<td>" + escHtml(row.recommendation || "") + "</td>";
+          '<td><span class="gap-status ' + displayStatus + '">' + escHtml(displayLabel) + '</span></td>' +
+          "<td" + recEditable + ">" + escHtml(recText) + "</td>";
+        if (isGap) {
+          const recCell = tr.cells[3];
+          const statusSpan = tr.cells[2].querySelector(".gap-status");
+          recCell.addEventListener("input", function() {
+            const changed = recCell.textContent.trim() !== recCell.dataset.orig.trim();
+            if (changed) {
+              statusSpan.className = "gap-status edited";
+              statusSpan.textContent = "Edited";
+              const cb = tr.querySelector(".gap-skill-cb");
+              if (cb) cb.checked = true;
+            } else {
+              statusSpan.className = "gap-status " + status;
+              statusSpan.textContent = row.status || "";
+            }
+          });
+        }
         gapSkillsBody.appendChild(tr);
       });
 
@@ -934,7 +986,7 @@
       th.addEventListener("click", function() {
         const col = parseInt(th.dataset.col);
         if (gapSortCol === col) { gapSortAsc = !gapSortAsc; } else { gapSortCol = col; gapSortAsc = true; }
-        const statusOrder = {covered: 0, partial: 1, missing: 2};
+        const statusOrder = {covered: 0, partial: 1, edited: 1.5, missing: 2};
         const rows = Array.from(gapSkillsBody.querySelectorAll("tr"));
         rows.sort(function(a, b) {
           const at = a.cells[col].textContent.trim().toLowerCase();
@@ -951,6 +1003,56 @@
       });
     });
 
+    /* Download Fit Report JSON */
+    gapDownloadBtn.addEventListener("click", function() {
+      if (!currentGapData) return;
+      const checkedSkills = [];
+      const candidateNotes = {};
+      gapSkillsBody.querySelectorAll(".gap-skill-cb").forEach(function(cb) {
+        if (cb.checked) checkedSkills.push(cb.dataset.skill);
+      });
+      gapSkillsBody.querySelectorAll(".gap-rec-editable").forEach(function(cell) {
+        const text = cell.textContent.trim();
+        const orig = (cell.dataset.orig || "").trim();
+        if (text !== orig) {
+          const skill = cell.parentElement.querySelector(".gap-skill-cb");
+          const skillName = skill ? skill.dataset.skill : cell.parentElement.cells[0].textContent.trim();
+          candidateNotes[skillName] = text;
+        }
+      });
+      const payload = {
+        gap_analysis: currentGapData,
+        user_edits: { checked_skills: checkedSkills, candidate_notes: candidateNotes }
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {type: "application/json"});
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      const baseName = (currentGapData && currentGapData._output_base) || "fit_report";
+      a.download = baseName + "_fit.json";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+    /* Upload Fit Report JSON — immediately render saved Fit Report */
+    fitJsonFile.addEventListener("change", function() {
+      if (!fitJsonFile.files.length) { preloadedFitJson = null; return; }
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const json = JSON.parse(e.target.result);
+          preloadedFitJson = json;
+          const gap = json.gap_analysis;
+          if (gap) {
+            renderGapAnalysis(gap, json.user_edits);
+          }
+        } catch (err) {
+          preloadedFitJson = null;
+          alert("Invalid JSON file");
+        }
+      };
+      reader.readAsText(fitJsonFile.files[0]);
+    });
+
     function escHtml(s) {
       const d = document.createElement("div");
       d.textContent = s;
@@ -962,14 +1064,24 @@
       generateBtn.disabled = true;
       generateBtn.textContent = "Generating...";
       const focusSkills = [];
+      const candidateNotes = {};
       gapSkillsBody.querySelectorAll(".gap-skill-cb:checked").forEach(function(cb) {
         focusSkills.push(cb.dataset.skill);
+      });
+      gapSkillsBody.querySelectorAll(".gap-rec-editable").forEach(function(cell) {
+        const text = cell.textContent.trim();
+        const orig = (cell.dataset.orig || "").trim();
+        if (text !== orig) {
+          const skill = cell.parentElement.querySelector(".gap-skill-cb");
+          const skillName = skill ? skill.dataset.skill : cell.parentElement.cells[0].textContent.trim();
+          candidateNotes[skillName] = text;
+        }
       });
       try {
         const resp = await fetch("/jobs/" + activeJobId + "/continue", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ focus_skills: focusSkills })
+          body: JSON.stringify({ focus_skills: focusSkills, candidate_notes: candidateNotes })
         });
         if (!resp.ok) {
           const err = await resp.json().catch(function() { return {}; });
@@ -1010,7 +1122,12 @@
         // Gap analysis ready — show analysis panel, pause polling
         if (data.status === "gap_analysis_ready" && data.gap_analysis) {
           stopPolling();
-          renderGapAnalysis(data.gap_analysis);
+          if (preloadedFitJson) {
+            renderGapAnalysis(preloadedFitJson.gap_analysis || data.gap_analysis, preloadedFitJson.user_edits);
+            preloadedFitJson = null;
+          } else {
+            renderGapAnalysis(data.gap_analysis);
+          }
           return;
         }
 
@@ -1115,6 +1232,7 @@
     });
     tailorInput.addEventListener("change", () => {
       jdField.classList.toggle("hidden", !tailorInput.checked);
+      fitJsonField.classList.toggle("hidden", !tailorInput.checked);
       document.getElementById("pageRoot").classList.toggle("tailor-mode", tailorInput.checked);
       /* Show/hide gap panel based on checkbox — preserve data */
       if (tailorInput.checked && hasGapData) {
@@ -1153,11 +1271,12 @@
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
 
-      // If gap analysis is ready, proceed with tailoring instead of new submission
-      if (gapAnalysisReady) {
+      // If gap analysis is ready from a live job, proceed via /continue endpoint
+      if (gapAnalysisReady && activeJobId) {
         proceedWithTailoring();
         return;
       }
+      // If gap analysis from preloaded JSON — fall through to normal submit with skip_gap
 
       const file = fileInput.files[0];
       if (!file) {
@@ -1188,6 +1307,22 @@
       formData.append("tailor", tailorInput.checked ? "true" : "false");
       formData.append("jd_text", tailorInput.checked ? jdText.value : "");
       formData.append("template_name", templateSelect.value);
+      if (preloadedFitJson) {
+        formData.append("skip_gap", "true");
+        /* Collect current edits from the rendered table */
+        const fs = [], cn = {};
+        gapSkillsBody.querySelectorAll(".gap-skill-cb:checked").forEach(function(cb) { fs.push(cb.dataset.skill); });
+        gapSkillsBody.querySelectorAll(".gap-rec-editable").forEach(function(cell) {
+          const text = cell.textContent.trim();
+          const orig = (cell.dataset.orig || "").trim();
+          if (text !== orig) {
+            const skill = cell.parentElement.querySelector(".gap-skill-cb");
+            cn[skill ? skill.dataset.skill : cell.parentElement.cells[0].textContent.trim()] = text;
+          }
+        });
+        formData.append("focus_skills_json", JSON.stringify(fs));
+        formData.append("candidate_notes_json", JSON.stringify(cn));
+      }
 
       try {
         const res = await fetch("/jobs", { method: "POST", body: formData });
