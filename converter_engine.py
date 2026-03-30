@@ -772,7 +772,7 @@ class QCVWebEngine:
         else:
             return "LOW"
 
-    def _apply_tailor(self, data: dict, jd_text: str, focus_skills: list | None = None, candidate_notes: dict | None = None) -> dict:
+    def _apply_tailor(self, data: dict, jd_text: str, focus_skills: list | None = None) -> dict:
         """Tailor the extracted CV JSON to match a Job Description."""
         prompt_template = self.config.get("prompt_tailor", core.DEFAULT_PROMPTS.get("prompt_tailor", ""))
         if not prompt_template:
@@ -782,12 +782,6 @@ class QCVWebEngine:
         if focus_skills:
             focus_block = "\n\nFOCUS SKILLS (user-selected gaps to address during tailoring):\n- " + "\n- ".join(focus_skills) + "\n\nFor each focus skill: if the candidate has direct or partial experience, emphasize and strengthen the wording. For skills the candidate lacks entirely, ONLY highlight transferable experience from adjacent technologies — NEVER add skills, projects, certifications, or job duties the candidate did not mention in the original CV."
             prompt += focus_block
-        if candidate_notes:
-            notes_lines = []
-            for skill, note in candidate_notes.items():
-                notes_lines.append(f'- "{skill}": {note}')
-            notes_block = "\n\nCANDIDATE NOTES (verified facts provided by the candidate during interview — use these verbatim):\n" + "\n".join(notes_lines) + "\n\nThese are real facts confirmed by the candidate. Incorporate them into the CV naturally. Fix any spelling, grammar, or punctuation errors in the notes, but preserve the factual content exactly. Do NOT paraphrase away key details. Do NOT add anything beyond what is stated here."
-            prompt += notes_block
         raw_data = call_llm_json(prompt, self.model_name)
         cv_data = raw_data.get("cv", raw_data) if isinstance(raw_data, dict) else raw_data
         if hasattr(core, "sanitize_json"):
@@ -939,7 +933,6 @@ class QCVWebEngine:
         pause_event: Optional[threading.Event] = None,
         gap_ready_cb: Optional[Callable[[dict], None]] = None,
         focus_skills_cb: Optional[Callable[[], list]] = None,
-        candidate_notes_cb: Optional[Callable[[], dict]] = None,
         preloaded_data: dict | None = None,
     ) -> Path:
         source_path = Path(source_path)
@@ -1011,12 +1004,11 @@ class QCVWebEngine:
                     raise
                 self._debug(debug_cb, f"Gap analysis failed, proceeding: {gap_err}")
 
-            # Collect user-selected focus skills and candidate notes (if any)
+            # Collect user-selected focus skills (if any)
             focus_skills = focus_skills_cb() if focus_skills_cb else []
-            candidate_notes = candidate_notes_cb() if candidate_notes_cb else {}
 
             self._status(status_cb, "Tailoring to JD", 70)
-            data = self._apply_tailor(data, jd_text, focus_skills=focus_skills, candidate_notes=candidate_notes)
+            data = self._apply_tailor(data, jd_text, focus_skills=focus_skills)
             self._last_tailored_json = copy.deepcopy(data)
 
         if anonymize:
