@@ -360,11 +360,13 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             import threading
             pause_event = threading.Event()
 
-            def gap_ready_cb(gap_result: dict) -> None:
+            def gap_ready_cb(gap_result: dict, base_json: dict = None) -> None:
                 job = jobs.get(job_id)
                 if job:
                     setattr(job, "_gap_analysis", gap_result)
                     setattr(job, "_pause_event", pause_event)
+                    if base_json:
+                        setattr(job, "_cv_json", base_json)
 
             def focus_skills_cb() -> list:
                 job = jobs.get(job_id)
@@ -603,6 +605,17 @@ def get_cv_json(job_id: str):
     if not cv_json:
         raise HTTPException(status_code=404, detail="CV JSON not available yet")
     return cv_json
+
+
+@app.put("/jobs/{job_id}/cv_json")
+async def update_cv_json(job_id: str, request: Request):
+    """Update the base CV JSON for this job (from the editor)."""
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    body = await request.json()
+    setattr(job, "_cv_json", body)
+    return {"ok": True}
 
 
 @app.get("/jobs/{job_id}/download")

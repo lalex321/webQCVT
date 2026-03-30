@@ -994,7 +994,7 @@ class QCVWebEngine:
                 gap_result["_output_base"] = _build_output_base_name(data, anonymize, tailor)
                 self._last_gap_analysis = gap_result
                 if gap_ready_cb and gap_result:
-                    gap_ready_cb(gap_result)
+                    gap_ready_cb(gap_result, copy.deepcopy(data))
                 if pause_event is not None:
                     self._status(status_cb, "gap_analysis_ready", 55)
                     if not pause_event.wait(timeout=600):

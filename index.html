@@ -402,6 +402,43 @@
       resize:vertical;
     }
 
+    /* CV Data Editor */
+    .cv-editor{padding:28px 32px;border-top:1px solid #d8e0ea}
+    .cv-editor-toggle{display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none}
+    .cv-editor-toggle:hover{opacity:.8}
+    .cv-editor-chevron{font-size:12px;color:#94a3b8;transition:transform .2s}
+    .cv-editor.open .cv-editor-chevron{transform:rotate(180deg)}
+    .cv-editor-body{display:none;margin-top:16px}
+    .cv-editor.open .cv-editor-body{display:block}
+    .cv-tabs{display:flex;gap:4px;border-bottom:2px solid #e2e8f0;margin-bottom:14px}
+    .cv-tab{background:none;border:none;padding:8px 14px;font-size:13px;font-weight:700;color:#64748b;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;min-width:auto;border-radius:0}
+    .cv-tab:hover{color:var(--text)}
+    .cv-tab.active{color:var(--text);border-bottom-color:var(--primary)}
+    .cv-tab-pane{display:none}
+    .cv-tab-pane.active{display:block}
+    .cv-ed-table{width:100%;border-collapse:collapse;font-size:13px}
+    .cv-ed-table th{background:#f1f5f9;text-align:left;padding:6px 8px;font-weight:700;font-size:12px;border-bottom:2px solid #64748b}
+    .cv-ed-table td{padding:5px 8px;border-bottom:1px solid #d0d7e2;vertical-align:top}
+    .cv-ed-cell{outline:none;border-radius:4px;padding:2px 4px;min-height:1.4em}
+    .cv-ed-cell:focus{background:#eff6ff;box-shadow:inset 0 0 0 2px #93c5fd}
+    .cv-ed-cell.dirty{background:#fef3c7}
+    .cv-ed-subrow{background:#f8fafc}
+    .cv-ed-subrow td{padding:10px 16px}
+    .cv-ed-btn{background:none;border:1px solid #94a3b8;color:#475569;border-radius:8px;padding:3px 10px;font-size:12px;font-weight:700;cursor:pointer;min-width:auto}
+    .cv-ed-btn:hover{background:#f1f5f9}
+    .cv-ed-btn.danger{border-color:#fca5a5;color:#dc2626}
+    .cv-ed-btn.danger:hover{background:#fef2f2}
+    .cv-ed-tag{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;background:var(--soft);border:1px solid var(--line);font-size:12px;margin:2px}
+    .cv-ed-tag .tag-x{cursor:pointer;color:#94a3b8;font-weight:700;font-size:14px;line-height:1}
+    .cv-ed-tag .tag-x:hover{color:#dc2626}
+    .cv-ed-field{margin-bottom:10px}
+    .cv-ed-field label{font-size:12px;font-weight:700;color:#64748b;margin-bottom:3px;display:block}
+    .cv-ed-field .cv-ed-cell{display:block;width:100%;border:1px solid #cfd8e3;border-radius:10px;padding:8px 12px;font-size:13px;min-height:2em}
+    .cv-ed-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .cv-ed-highlights li{margin-bottom:4px;padding:2px 4px;border-radius:4px}
+    .cv-ed-highlights li:focus{background:#eff6ff;box-shadow:inset 0 0 0 2px #93c5fd}
+    .cv-ed-row-actions{white-space:nowrap}
+
     /* Tailor mode: wider layout */
     .page.tailor-mode{max-width:960px}
     .page.tailor-mode .shell{grid-template-columns:0.7fr 1.3fr}
@@ -520,6 +557,26 @@
         <thead><tr><th data-col="0">Requirement <span class="sort-arrow"></span></th><th data-col="1">Category <span class="sort-arrow"></span></th><th data-col="2">Status <span class="sort-arrow"></span></th><th data-col="3">Recommendation <span class="sort-arrow"></span></th></tr></thead>
         <tbody id="gapSkillsBody"></tbody>
       </table>
+    </div>
+    <div id="cvEditorPanel" class="cv-editor hidden">
+      <div class="cv-editor-toggle" id="cvEditorToggle">
+        <h2 class="gap-title">CV Data</h2>
+        <span class="cv-editor-chevron">&#9660;</span>
+      </div>
+      <div class="cv-editor-body" id="cvEditorBody">
+        <div class="cv-tabs" id="cvEditorTabs">
+          <button class="cv-tab active" data-tab="basics" type="button">Basics</button>
+          <button class="cv-tab" data-tab="work" type="button">Work</button>
+          <button class="cv-tab" data-tab="skills" type="button">Skills</button>
+          <button class="cv-tab" data-tab="education" type="button">Education</button>
+          <button class="cv-tab" data-tab="languages" type="button">Languages</button>
+        </div>
+        <div id="cvPaneBasics" class="cv-tab-pane active"></div>
+        <div id="cvPaneWork" class="cv-tab-pane"></div>
+        <div id="cvPaneSkills" class="cv-tab-pane"></div>
+        <div id="cvPaneEducation" class="cv-tab-pane"></div>
+        <div id="cvPaneLanguages" class="cv-tab-pane"></div>
+      </div>
     </div>
     </div><!-- /main-card -->
   </div>
@@ -879,6 +936,9 @@
       gapAnalysisReady = false;
       hasGapData = false;
       currentGapData = null;
+      cvEditorPanel.classList.add("hidden");
+      cvEditorPanel.classList.remove("open");
+      cvData = null; cvDirty = false;
     }
 
     function renderGapAnalysis(gap, savedEdits) {
@@ -916,7 +976,6 @@
         const status = (row.status || "").toLowerCase().replace(/\s+/g, "");
         const isGap = status === "partial" || status === "missing";
         const reqName = row.requirement || "";
-        const hasNote = savedNotes.hasOwnProperty(reqName);
         /* Determine checked state: from saved edits or default */
         let checked = false;
         if (savedChecked) {
@@ -944,6 +1003,8 @@
       generateBtn.disabled = false;
       generateBtn.textContent = "Generate Tailored CV";
       generateBtn.classList.remove("hidden");
+      // Load CV editor
+      loadCvEditor();
     }
 
     /* Re-enable tailoring when checkboxes change */
@@ -992,13 +1053,13 @@
         if (cb.checked) checkedSkills.push(cb.dataset.skill);
       });
 
-      /* Fetch full CV JSON from server */
-      let cvJson = {};
-      if (activeJobId) {
+      /* Use editor data if available, otherwise fetch from server */
+      let cvJson = cvData ? JSON.parse(JSON.stringify(cvData)) : {};
+      if (!cvData && activeJobId) {
         try {
           const resp = await fetch("/jobs/" + activeJobId + "/cv_json");
           if (resp.ok) cvJson = await resp.json();
-        } catch (e) { /* use empty if fetch fails */ }
+        } catch (e) {}
       }
 
       /* Attach _fit_session */
@@ -1060,8 +1121,383 @@
       return d.innerHTML;
     }
 
+    /* ====== CV Data Editor ====== */
+    const cvEditorPanel = document.getElementById("cvEditorPanel");
+    const cvEditorToggle = document.getElementById("cvEditorToggle");
+    const cvEditorBody = document.getElementById("cvEditorBody");
+    let cvData = null, cvDataOrig = null, cvDirty = false;
+
+    cvEditorToggle.addEventListener("click", function() {
+      cvEditorPanel.classList.toggle("open");
+    });
+
+    /* Tabs */
+    document.getElementById("cvEditorTabs").addEventListener("click", function(e) {
+      const btn = e.target.closest(".cv-tab");
+      if (!btn) return;
+      document.querySelectorAll(".cv-tab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".cv-tab-pane").forEach(p => { p.classList.remove("active"); p.style.display = "none"; });
+      btn.classList.add("active");
+      const pane = document.getElementById("cvPane" + btn.dataset.tab.charAt(0).toUpperCase() + btn.dataset.tab.slice(1));
+      pane.classList.add("active");
+      pane.style.display = "block";
+      renderCvTab(btn.dataset.tab);
+    });
+
+    function markCvDirty() {
+      cvDirty = true;
+      gapAnalysisReady = true;
+      generateBtn.disabled = false;
+      generateBtn.textContent = "Generate Tailored CV";
+      generateBtn.classList.remove("hidden");
+      topDownloadLink.classList.add("hidden");
+    }
+
+    async function loadCvEditor() {
+      if (!activeJobId) return;
+      try {
+        const r = await fetch("/jobs/" + activeJobId + "/cv_json");
+        if (!r.ok) return;
+        cvData = await r.json();
+        cvDataOrig = JSON.parse(JSON.stringify(cvData));
+        cvDirty = false;
+        cvEditorPanel.classList.remove("hidden");
+        renderCvTab("basics");
+      } catch(e) {}
+    }
+
+    async function saveCvEdits() {
+      if (!cvDirty || !activeJobId || !cvData) return;
+      const clean = Object.assign({}, cvData);
+      delete clean._fit_session;
+      delete clean._output_base;
+      await fetch("/jobs/" + activeJobId + "/cv_json", {
+        method: "PUT",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(clean)
+      });
+    }
+
+    function renderCvTab(tab) {
+      if (!cvData) return;
+      switch(tab) {
+        case "basics": renderBasicsTab(); break;
+        case "work": renderWorkTab(); break;
+        case "skills": renderSkillsTab(); break;
+        case "education": renderEducationTab(); break;
+        case "languages": renderLanguagesTab(); break;
+      }
+    }
+
+    /* --- Basics --- */
+    function renderBasicsTab() {
+      const b = cvData.basics || {};
+      const c = b.contacts || {};
+      const s = cvData.summary || {};
+      const pane = document.getElementById("cvPaneBasics");
+      pane.innerHTML =
+        '<div class="cv-ed-grid">' +
+        field("Name", b.name || "", "basics.name") +
+        field("Title", b.current_title || "", "basics.current_title") +
+        field("Email", c.email || "", "basics.contacts.email") +
+        field("Phone", c.phone || "", "basics.contacts.phone") +
+        field("Location", c.location || "", "basics.contacts.location") +
+        field("Objective", b.objective || "", "basics.objective") +
+        '</div>' +
+        '<div class="cv-ed-field"><label>Links</label>' +
+        '<div id="cvBasicsLinks">' + (b.links || []).map(function(l,i) {
+          return '<div style="display:flex;gap:6px;margin-bottom:4px">' +
+            '<div class="cv-ed-cell" contenteditable data-path="basics.links.' + i + '" style="flex:1;border:1px solid #cfd8e3;border-radius:8px;padding:4px 8px;font-size:13px">' + escHtml(l) + '</div>' +
+            '<button class="cv-ed-btn danger" data-action="del-link" data-idx="' + i + '" type="button">-</button></div>';
+        }).join("") +
+        '<button class="cv-ed-btn" data-action="add-link" type="button">+ Link</button></div></div>' +
+        '<div class="cv-ed-field"><label>Summary</label>' +
+        '<ul class="cv-ed-highlights" id="cvBasicsSummary">' +
+        (s.bullet_points || []).map(function(bp, i) {
+          return '<li class="cv-ed-cell" contenteditable data-path="summary.bullet_points.' + i + '">' + escHtml(bp) + '</li>';
+        }).join("") +
+        '</ul><button class="cv-ed-btn" data-action="add-summary" type="button">+ Bullet</button></div>';
+    }
+
+    function field(label, value, path) {
+      return '<div class="cv-ed-field"><label>' + escHtml(label) + '</label>' +
+        '<div class="cv-ed-cell" contenteditable data-path="' + path + '">' + escHtml(value) + '</div></div>';
+    }
+
+    /* --- Work Experience --- */
+    function renderWorkTab() {
+      const exp = cvData.experience || [];
+      const pane = document.getElementById("cvPaneWork");
+      let h = '<table class="cv-ed-table"><thead><tr>' +
+        '<th style="width:22%">Company</th><th style="width:20%">Role</th>' +
+        '<th style="width:10%">Start</th><th style="width:10%">End</th>' +
+        '<th style="width:32%">Description</th><th style="width:6%"></th></tr></thead><tbody>';
+      exp.forEach(function(e, i) {
+        h += '<tr data-idx="' + i + '">' +
+          '<td class="cv-ed-cell" contenteditable data-path="experience.' + i + '.company_name">' + escHtml(e.company_name || "") + '</td>' +
+          '<td class="cv-ed-cell" contenteditable data-path="experience.' + i + '.role">' + escHtml(e.role || "") + '</td>' +
+          '<td class="cv-ed-cell" contenteditable data-path="experience.' + i + '.dates.start">' + escHtml((e.dates||{}).start || "") + '</td>' +
+          '<td class="cv-ed-cell" contenteditable data-path="experience.' + i + '.dates.end">' + escHtml((e.dates||{}).end || "") + '</td>' +
+          '<td class="cv-ed-cell" contenteditable data-path="experience.' + i + '.project_description">' + escHtml(e.project_description || "") + '</td>' +
+          '<td class="cv-ed-row-actions">' +
+            '<button class="cv-ed-btn" data-action="expand-work" data-idx="' + i + '" type="button" title="Expand">&#9660;</button> ' +
+            '<button class="cv-ed-btn danger" data-action="del-work" data-idx="' + i + '" type="button" title="Delete">-</button></td></tr>';
+        /* Sub-row for highlights + environment */
+        h += '<tr class="cv-ed-subrow hidden" data-parent="' + i + '"><td colspan="6">' +
+          '<strong style="font-size:12px">Accomplishments</strong>' +
+          '<ul class="cv-ed-highlights">' +
+          (e.highlights || []).map(function(hl, hi) {
+            return '<li class="cv-ed-cell" contenteditable data-path="experience.' + i + '.highlights.' + hi + '">' + escHtml(hl) + '</li>';
+          }).join("") +
+          '</ul><button class="cv-ed-btn" data-action="add-highlight" data-idx="' + i + '" type="button">+ Accomplishment</button>' +
+          '<div style="margin-top:10px"><strong style="font-size:12px">Environment</strong></div>' +
+          '<div class="cv-ed-tags-wrap">' +
+          (e.environment || []).map(function(env, ei) {
+            return '<span class="cv-ed-tag">' + escHtml(env) +
+              ' <span class="tag-x" data-action="del-env" data-idx="' + i + '" data-ei="' + ei + '">&times;</span></span>';
+          }).join("") +
+          ' <button class="cv-ed-btn" data-action="add-env" data-idx="' + i + '" type="button">+ Tech</button>' +
+          '</div></td></tr>';
+      });
+      h += '</tbody></table><button class="cv-ed-btn" data-action="add-work" type="button" style="margin-top:8px">+ Work Entry</button>';
+      pane.innerHTML = h;
+    }
+
+    /* --- Skills --- */
+    function renderSkillsTab() {
+      const skills = cvData.skills || {};
+      const pane = document.getElementById("cvPaneSkills");
+      let h = '';
+      Object.keys(skills).forEach(function(cat) {
+        const items = skills[cat] || [];
+        h += '<div style="margin-bottom:14px">' +
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">' +
+          '<strong class="cv-ed-cell" contenteditable data-path="skills-cat" data-cat="' + escHtml(cat) + '" style="font-size:13px">' + escHtml(cat) + '</strong>' +
+          '<button class="cv-ed-btn danger" data-action="del-cat" data-cat="' + escHtml(cat) + '" type="button" style="font-size:11px">- Category</button></div>' +
+          '<div>';
+        items.forEach(function(sk, si) {
+          h += '<span class="cv-ed-tag"><span class="cv-ed-cell" contenteditable data-path="skills.' + escHtml(cat) + '.' + si + '">' + escHtml(sk) + '</span>' +
+            ' <span class="tag-x" data-action="del-skill" data-cat="' + escHtml(cat) + '" data-si="' + si + '">&times;</span></span>';
+        });
+        h += ' <button class="cv-ed-btn" data-action="add-skill" data-cat="' + escHtml(cat) + '" type="button" style="font-size:11px">+</button>' +
+          '</div></div>';
+      });
+      h += '<button class="cv-ed-btn" data-action="add-cat" type="button">+ Skill Category</button>';
+      pane.innerHTML = h;
+    }
+
+    /* --- Education --- */
+    function renderEducationTab() {
+      const edu = cvData.education || [];
+      const pane = document.getElementById("cvPaneEducation");
+      let h = '<table class="cv-ed-table"><thead><tr><th>Institution</th><th>Degree</th><th>Year</th><th>Details</th><th></th></tr></thead><tbody>';
+      edu.forEach(function(e, i) {
+        h += '<tr data-idx="' + i + '">' +
+          '<td class="cv-ed-cell" contenteditable data-path="education.' + i + '.institution">' + escHtml(e.institution || "") + '</td>' +
+          '<td class="cv-ed-cell" contenteditable data-path="education.' + i + '.degree">' + escHtml(e.degree || "") + '</td>' +
+          '<td class="cv-ed-cell" contenteditable data-path="education.' + i + '.year">' + escHtml(e.year || "") + '</td>' +
+          '<td class="cv-ed-cell" contenteditable data-path="education.' + i + '.details">' + escHtml(e.details || "") + '</td>' +
+          '<td><button class="cv-ed-btn danger" data-action="del-edu" data-idx="' + i + '" type="button">-</button></td></tr>';
+      });
+      h += '</tbody></table><button class="cv-ed-btn" data-action="add-edu" type="button" style="margin-top:8px">+ Education</button>';
+      pane.innerHTML = h;
+    }
+
+    /* --- Languages --- */
+    function renderLanguagesTab() {
+      const langs = cvData.languages || [];
+      const pane = document.getElementById("cvPaneLanguages");
+      let h = '<table class="cv-ed-table"><thead><tr><th>Language</th><th>Proficiency</th><th>Level</th><th>Details</th><th></th></tr></thead><tbody>';
+      langs.forEach(function(l, i) {
+        h += '<tr data-idx="' + i + '">' +
+          '<td class="cv-ed-cell" contenteditable data-path="languages.' + i + '.language">' + escHtml(l.language || "") + '</td>' +
+          '<td class="cv-ed-cell" contenteditable data-path="languages.' + i + '.proficiency">' + escHtml(l.proficiency || "") + '</td>' +
+          '<td class="cv-ed-cell" contenteditable data-path="languages.' + i + '.level">' + escHtml(l.level || "") + '</td>' +
+          '<td class="cv-ed-cell" contenteditable data-path="languages.' + i + '.details">' + escHtml(l.details || "") + '</td>' +
+          '<td><button class="cv-ed-btn danger" data-action="del-lang" data-idx="' + i + '" type="button">-</button></td></tr>';
+      });
+      h += '</tbody></table><button class="cv-ed-btn" data-action="add-lang" type="button" style="margin-top:8px">+ Language</button>';
+      pane.innerHTML = h;
+    }
+
+    /* --- Write-back: contenteditable blur → update cvData --- */
+    cvEditorBody.addEventListener("focusout", function(e) {
+      const cell = e.target.closest(".cv-ed-cell[data-path]");
+      if (!cell) return;
+      const path = cell.dataset.path;
+      const val = cell.textContent.trim();
+      setNestedValue(cvData, path, val);
+      markCvDirty();
+    });
+
+    /* Handle renamed skill categories */
+    cvEditorBody.addEventListener("focusout", function(e) {
+      const cell = e.target.closest("[data-path='skills-cat']");
+      if (!cell) return;
+      const oldCat = cell.dataset.cat;
+      const newCat = cell.textContent.trim();
+      if (newCat && newCat !== oldCat && cvData.skills) {
+        cvData.skills[newCat] = cvData.skills[oldCat];
+        delete cvData.skills[oldCat];
+        markCvDirty();
+        renderSkillsTab();
+      }
+    });
+
+    function setNestedValue(obj, path, val) {
+      /* paths like "experience.0.company_name" or "basics.contacts.email" or "skills.Cloud.2" */
+      const parts = path.split(".");
+      let cur = obj;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const k = isNaN(parts[i]) ? parts[i] : parseInt(parts[i]);
+        if (cur[k] === undefined) cur[k] = isNaN(parts[i+1]) ? {} : [];
+        cur = cur[k];
+      }
+      const last = isNaN(parts[parts.length-1]) ? parts[parts.length-1] : parseInt(parts[parts.length-1]);
+      cur[last] = val;
+    }
+
+    /* --- Button actions (delegated) --- */
+    cvEditorBody.addEventListener("click", function(e) {
+      const btn = e.target.closest("[data-action]");
+      if (!btn) return;
+      const action = btn.dataset.action;
+      const idx = parseInt(btn.dataset.idx);
+
+      if (action === "expand-work") {
+        const sub = cvEditorBody.querySelector('.cv-ed-subrow[data-parent="' + idx + '"]');
+        if (sub) sub.classList.toggle("hidden");
+        return;
+      }
+      if (action === "del-work") {
+        const entry = (cvData.experience || [])[idx];
+        if (entry && (entry.company_name || entry.role)) {
+          if (!confirm('Delete "' + (entry.role || "") + ' at ' + (entry.company_name || "") + '"?')) return;
+        }
+        cvData.experience.splice(idx, 1);
+        markCvDirty(); renderWorkTab(); return;
+      }
+      if (action === "add-work") {
+        if (!cvData.experience) cvData.experience = [];
+        cvData.experience.push({category:"Professional Experience",company_name:"",role:"",dates:{start:"",end:""},location:"",project_description:"",highlights:[],environment:[]});
+        markCvDirty(); renderWorkTab(); return;
+      }
+      if (action === "add-highlight") {
+        cvData.experience[idx].highlights.push("");
+        markCvDirty(); renderWorkTab();
+        /* expand the sub-row */
+        const sub = cvEditorBody.querySelector('.cv-ed-subrow[data-parent="' + idx + '"]');
+        if (sub) sub.classList.remove("hidden");
+        return;
+      }
+      if (action === "del-env") {
+        const ei = parseInt(btn.dataset.ei);
+        cvData.experience[idx].environment.splice(ei, 1);
+        markCvDirty(); renderWorkTab(); return;
+      }
+      if (action === "add-env") {
+        const v = prompt("Technology:");
+        if (v && v.trim()) {
+          cvData.experience[idx].environment.push(v.trim());
+          markCvDirty(); renderWorkTab();
+        }
+        return;
+      }
+      if (action === "del-skill") {
+        const cat = btn.dataset.cat, si = parseInt(btn.dataset.si);
+        cvData.skills[cat].splice(si, 1);
+        markCvDirty(); renderSkillsTab(); return;
+      }
+      if (action === "add-skill") {
+        const cat = btn.dataset.cat;
+        const v = prompt("Skill:");
+        if (v && v.trim()) {
+          cvData.skills[cat].push(v.trim());
+          markCvDirty(); renderSkillsTab();
+        }
+        return;
+      }
+      if (action === "del-cat") {
+        const cat = btn.dataset.cat;
+        if (!confirm('Delete category "' + cat + '" and all its skills?')) return;
+        delete cvData.skills[cat];
+        markCvDirty(); renderSkillsTab(); return;
+      }
+      if (action === "add-cat") {
+        const v = prompt("Category name:");
+        if (v && v.trim()) {
+          if (!cvData.skills) cvData.skills = {};
+          cvData.skills[v.trim()] = [];
+          markCvDirty(); renderSkillsTab();
+        }
+        return;
+      }
+      if (action === "del-edu") {
+        const entry = (cvData.education || [])[idx];
+        if (entry && (entry.institution || entry.degree)) {
+          if (!confirm('Delete "' + (entry.degree || "") + ' at ' + (entry.institution || "") + '"?')) return;
+        }
+        cvData.education.splice(idx, 1);
+        markCvDirty(); renderEducationTab(); return;
+      }
+      if (action === "add-edu") {
+        if (!cvData.education) cvData.education = [];
+        cvData.education.push({institution:"",degree:"",year:"",details:""});
+        markCvDirty(); renderEducationTab(); return;
+      }
+      if (action === "del-lang") {
+        const entry = (cvData.languages || [])[idx];
+        if (entry && entry.language) {
+          if (!confirm('Delete "' + entry.language + '"?')) return;
+        }
+        cvData.languages.splice(idx, 1);
+        markCvDirty(); renderLanguagesTab(); return;
+      }
+      if (action === "add-lang") {
+        if (!cvData.languages) cvData.languages = [];
+        cvData.languages.push({language:"",proficiency:"",level:"",details:""});
+        markCvDirty(); renderLanguagesTab(); return;
+      }
+      if (action === "del-link") {
+        cvData.basics.links.splice(idx, 1);
+        markCvDirty(); renderBasicsTab(); return;
+      }
+      if (action === "add-link") {
+        if (!cvData.basics.links) cvData.basics.links = [];
+        cvData.basics.links.push("");
+        markCvDirty(); renderBasicsTab(); return;
+      }
+      if (action === "add-summary") {
+        if (!cvData.summary) cvData.summary = {};
+        if (!cvData.summary.bullet_points) cvData.summary.bullet_points = [];
+        cvData.summary.bullet_points.push("");
+        markCvDirty(); renderBasicsTab(); return;
+      }
+    });
+
+    /* --- Keyboard: Enter=next cell, Esc=revert, Tab=next cell --- */
+    cvEditorBody.addEventListener("keydown", function(e) {
+      const cell = e.target.closest(".cv-ed-cell[contenteditable]");
+      if (!cell) return;
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const all = Array.from(cvEditorBody.querySelectorAll(".cv-ed-cell[contenteditable]"));
+        const i = all.indexOf(cell);
+        if (i >= 0 && i < all.length - 1) all[i + 1].focus();
+        else cell.blur();
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        /* revert not implemented for simplicity — just blur */
+        cell.blur();
+        return;
+      }
+    });
+
     async function proceedWithTailoring() {
       if (!activeJobId) return;
+      await saveCvEdits();
       generateBtn.disabled = true;
       generateBtn.textContent = "Generating...";
       const focusSkills = [];
@@ -1125,6 +1561,7 @@
         if (data.ready) {
           stopPolling();
           setPrimaryAction("done", `/jobs/${jobId}/download`);
+          loadCvEditor();
           return;
         }
 
