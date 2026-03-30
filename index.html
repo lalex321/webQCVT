@@ -1802,13 +1802,14 @@
 
     anonymizeInput.addEventListener("change", () => {
       savePrefs();
-      if (hasGapData) {
+      if (tailorInput.checked && hasGapData) {
         gapAnalysisReady = true;
         generateBtn.disabled = false;
         generateBtn.textContent = "Generate Tailored CV";
         generateBtn.classList.remove("hidden");
         topDownloadLink.classList.add("hidden");
       }
+      /* If not tailor mode — don't touch the button at all */
     });
     tailorInput.addEventListener("change", () => {
       jdField.classList.toggle("hidden", !tailorInput.checked);
