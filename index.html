@@ -932,6 +932,7 @@
 
     function resetForNewInput() {
       activeJobId = null;
+      try { localStorage.removeItem("qcv_last_job"); } catch(e) {}
       detailsLines = [];
       detailsPayload = null;
       stopPolling();
@@ -1941,6 +1942,7 @@
         }
         const data = await res.json();
         activeJobId = data.job_id;
+        try { localStorage.setItem("qcv_last_job", activeJobId); } catch(e) {}
         jobRefined = false;
         detailsPayload = data.details || detailsPayload;
         setStatus(data.status, data.progress, "");
@@ -1961,6 +1963,34 @@
       }
       setPrimaryAction("idle");
       setStatus("Queued", 0, "");
+
+      /* Restore previous job on page reload */
+      try {
+        const savedJob = localStorage.getItem("qcv_last_job");
+        if (savedJob) {
+          const r = await fetch(`/jobs/${savedJob}`);
+          if (r.ok) {
+            const d = await r.json();
+            activeJobId = savedJob;
+            if (d.status === "gap_analysis_ready" && d.gap_analysis) {
+              setStatus(d.status, d.progress);
+              renderGapAnalysis(d.gap_analysis);
+              loadCvEditor();
+            } else if (d.ready) {
+              setStatus("Done", 100);
+              setPrimaryAction("done", `/jobs/${savedJob}/download`);
+              loadCvEditor();
+              if (d.details && d.details.content_details && d.details.content_details.jd_keyword_report) {
+                detailsPayload = d.details;
+              }
+            } else if (d.status !== "Failed") {
+              setStatus(d.status, d.progress);
+              setPrimaryAction("running");
+              pollTimer = setInterval(() => pollJob(activeJobId), 1500);
+            }
+          }
+        }
+      } catch(e) {}
     })();
   </script>
 </body>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import hashlib
 import threading
@@ -30,6 +31,26 @@ app = FastAPI(title="Q-CV Web Converter")
 app.mount("/images", StaticFiles(directory=APP_DIR / "images"), name="images")
 jobs = InMemoryJobStore()
 _SERVER_START = time.time()
+
+# Background cleanup: remove finished jobs and their tmp dirs every 10 minutes
+_JOB_MAX_AGE_SEC = 3600  # 1 hour
+
+def _cleanup_loop():
+    import shutil
+    while True:
+        time.sleep(600)
+        try:
+            removed = jobs.cleanup_old(_JOB_MAX_AGE_SEC)
+            # Clean orphaned tmp dirs older than max age
+            tmp_root = Path(os.environ.get("TMPDIR", "/tmp"))
+            cutoff = time.time() - _JOB_MAX_AGE_SEC
+            for d in tmp_root.glob("qcv_web_*"):
+                if d.is_dir() and d.stat().st_mtime < cutoff:
+                    shutil.rmtree(d, ignore_errors=True)
+        except Exception:
+            pass
+
+threading.Thread(target=_cleanup_loop, daemon=True).start()
 
 
 def append_usage(event: dict) -> None:
@@ -357,7 +378,6 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
         pause_event = None
         gap_ready_cb = None
         if tailor and jd_text.strip() and not skip_gap:
-            import threading
             pause_event = threading.Event()
 
             def gap_ready_cb(gap_result: dict, base_json: dict = None) -> None:
@@ -615,7 +635,6 @@ async def update_cv_json(job_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Job not found")
     body = await request.json()
     # Backup previous version
-    import copy
     prev = getattr(job, "_cv_json", None)
     if prev:
         bak_list = getattr(job, "_cv_json_bak", [])
@@ -646,7 +665,7 @@ async def reanalyze_job(job_id: str, request: Request):
     configure_gemini(api_key)
 
     gap_result = engine._analyze_gap(cv_json, jd_text)
-    gap_result["_output_base"] = _build_output_base_name(cv_json, getattr(job, "anonymize", False), True)
+    gap_result["_output_base"] = _build_output_base_name(cv_json, anonymize=False)
 
     setattr(job, "_gap_analysis", gap_result)
     return gap_result

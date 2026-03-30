@@ -2197,35 +2197,6 @@ def generate_docx_from_json(data, output_path, cfg):
     # Required sections per regulations are rendered earlier (Summary/Technical Skills/Work Experience/Education/Certifications).
     other_sections = []
 
-    def _as_lines(val):
-        if val is None:
-            return []
-        if isinstance(val, str):
-            return [val.strip()] if val.strip() else []
-        if isinstance(val, list):
-            out=[]
-            for x in val:
-                if isinstance(x, str) and x.strip():
-                    out.append(x.strip())
-                elif isinstance(x, dict):
-                    # best-effort stringify common keys
-                    txt = " — ".join([str(x.get(k,"")).strip() for k in ("title","name","language","institution","degree","description") if str(x.get(k,"")).strip()])
-                    if txt:
-                        out.append(txt)
-            return out
-        if isinstance(val, dict):
-            # dict of category->list
-            out=[]
-            for k,v in val.items():
-                if isinstance(v, list) and v:
-                    items=[str(i).strip() for i in v if str(i).strip()]
-                    if items:
-                        out.append(f"{k}: " + ", ".join(items))
-                elif isinstance(v, str) and v.strip():
-                    out.append(f"{k}: {v.strip()}")
-            return out
-        return [str(val)]
-    
 #=========================================================
     # Candidate optional sections (canonical only)
     # Languages: render ONLY explicit human/spoken languages from the canonical

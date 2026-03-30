@@ -121,6 +121,18 @@ class InMemoryJobStore:
         with self._lock:
             return sum(1 for j in self._jobs.values() if j.status not in ("Done", "Failed", "Low Relevance", "Queued"))
 
+    def cleanup_old(self, max_age_sec: int = 3600) -> list[str]:
+        """Remove finished jobs older than max_age_sec. Returns list of removed job IDs."""
+        cutoff = time.time() - max_age_sec
+        removed = []
+        with self._lock:
+            for jid, job in list(self._jobs.items()):
+                if job.status in ("Done", "Failed", "Low Relevance") and job.created_at < cutoff:
+                    removed.append(jid)
+            for jid in removed:
+                del self._jobs[jid]
+        return removed
+
 
 
 def _slug_part(value: str) -> str:
@@ -288,6 +300,23 @@ def call_llm_json_for_uploaded_file(prompt: str, model_name: str, source_path: P
 
 
 
+# Common stop words for JD/CV keyword comparison (used by both relevance check and keyword report)
+_JD_STOP_WORDS = {
+    'the', 'and', 'for', 'with', 'from', 'that', 'this', 'are', 'was', 'were',
+    'has', 'have', 'been', 'will', 'can', 'not', 'but', 'also', 'such', 'other',
+    'all', 'any', 'each', 'our', 'you', 'your', 'their', 'them', 'who', 'what',
+    'when', 'how', 'more', 'most', 'some', 'than', 'into', 'over', 'about',
+    'experience', 'years', 'role', 'work', 'working', 'strong', 'ability',
+    'team', 'teams', 'including', 'across', 'within', 'using', 'based',
+    'senior', 'junior', 'lead', 'manager', 'head', 'director', 'staff',
+    'full', 'high', 'time', 'level', 'new', 'key', 'well', 'good', 'best',
+    'systems', 'system', 'management', 'client', 'clients', 'project',
+    'projects', 'delivery', 'process', 'service', 'services', 'support',
+    'requirements', 'quality', 'development', 'performance', 'business',
+    'communication', 'skills', 'knowledge', 'solutions', 'environment',
+}
+
+
 def _as_clean_list(value):
     if isinstance(value, list):
         out = []
@@ -336,21 +365,8 @@ def _is_nonempty_education_entry(entry) -> bool:
 
 def _compute_jd_keyword_report(data: dict, jd_text: str) -> dict:
     """Compare JD keywords against tailored CV to produce matched/missing/added report."""
-    stop = {'the', 'and', 'for', 'with', 'from', 'that', 'this', 'are', 'was', 'were',
-            'has', 'have', 'been', 'will', 'can', 'not', 'but', 'also', 'such', 'other',
-            'all', 'any', 'each', 'our', 'you', 'your', 'their', 'them', 'who', 'what',
-            'when', 'how', 'more', 'most', 'some', 'than', 'into', 'over', 'about',
-            'experience', 'years', 'role', 'work', 'working', 'strong', 'ability',
-            'team', 'teams', 'including', 'across', 'within', 'using', 'based',
-            'senior', 'junior', 'lead', 'manager', 'head', 'director', 'staff',
-            'full', 'high', 'time', 'level', 'new', 'key', 'well', 'good', 'best',
-            'systems', 'system', 'management', 'client', 'clients', 'project',
-            'projects', 'delivery', 'process', 'service', 'services', 'support',
-            'requirements', 'quality', 'development', 'performance', 'business',
-            'communication', 'skills', 'knowledge', 'solutions', 'environment'}
-
     def _extract_words(text: str) -> set[str]:
-        return set(w.lower() for w in re.findall(r'[A-Za-z#+.]{3,}', text)) - stop
+        return set(w.lower() for w in re.findall(r'[A-Za-z#+.]{3,}', text)) - _JD_STOP_WORDS
 
     # JD keywords
     jd_words = _extract_words(jd_text)
@@ -482,10 +498,13 @@ def _build_content_details(data: dict, *, template_name: str, anonymize: bool, s
         result["jd_keyword_report"] = _compute_jd_keyword_report(data, jd_text)
     return result
 
-def _translate_non_english(data: dict) -> None:
+def _translate_non_english(data: dict, model_name: str = "") -> None:
     """Translate non-English content via LLM (no-op if all English)."""
     if not _gemini_api_key or not isinstance(data, dict):
         return
+    # Sync MODEL_NAME in cv_engine so translate calls use the configured model
+    if model_name:
+        core.MODEL_NAME = model_name
     # Full translation pass if significant non-English content detected
     try:
         if hasattr(core, "translate_full_json_via_llm"):
@@ -595,7 +614,7 @@ class QCVWebEngine:
         data = call_llm_json(full_prompt, self.model_name)
         if hasattr(core, "sanitize_json"):
             data = core.sanitize_json(data)
-        _translate_non_english(data)
+        _translate_non_english(data, self.model_name)
         return data
 
     def _parse_cv_file_to_json(self, source_path: Path | str) -> dict:
@@ -610,7 +629,7 @@ class QCVWebEngine:
             data = call_llm_json_for_uploaded_file(full_prompt, self.model_name, source_path)
             if hasattr(core, "sanitize_json"):
                 data = core.sanitize_json(data)
-            _translate_non_english(data)
+            _translate_non_english(data, self.model_name)
             return data
 
         source_text = read_source_text(source_path)
@@ -656,67 +675,13 @@ class QCVWebEngine:
         else:
             out = copy.deepcopy(data)
 
+        # smart_anonymize_data handles name, contacts, links, companies, publications.
+        # Additionally clear location and contact_line for web output.
         basics = out.get("basics", {}) or {}
-        contacts = basics.get("contacts", {}) or {}
-
-        name = str(basics.get("name") or "").strip()
-        if name:
-            # Preserve academic degrees, strip from name parts for anonymization
-            _deg_patterns = {'phd', 'ph.d.', 'ph.d', 'md', 'm.d.', 'dsc', 'd.sc.', 'dr.'}
-            parts = [p for p in re.split(r"\s+", name) if p.strip()]
-            degrees = [p for p in parts if p.lower().rstrip('.,') in _deg_patterns]
-            name_parts = [p for p in parts if p.lower().rstrip('.,') not in _deg_patterns]
-            # Also strip commas from last name part (e.g. "Chebanov," before "PhD")
-            name_parts = [p.rstrip(',') for p in name_parts]
-            name_parts = [p for p in name_parts if p]
-            if len(name_parts) >= 2:
-                anon = f"{name_parts[0]} {name_parts[1][0]}."
-            elif len(name_parts) == 1:
-                anon = name_parts[0]
-            else:
-                anon = "Candidate"
-            # Check education for degree if not in name
-            if not degrees:
-                for edu in out.get('education', []):
-                    deg = str(edu.get('degree', '')).lower()
-                    if any(d in deg for d in ['phd', 'ph.d', 'doctorate']):
-                        degrees.append('PhD'); break
-                    elif deg.startswith('md') or 'm.d.' in deg:
-                        degrees.append('MD'); break
-            if degrees:
-                seen = set()
-                unique = [d for d in degrees if d.lower().rstrip('.,') not in seen and not seen.add(d.lower().rstrip('.,'))]
-                anon = f"{anon}, {' '.join(unique)}"
-            basics["name"] = anon
-
-        contacts["email"] = ""
-        contacts["phone"] = ""
-        basics["links"] = []
-        basics["contacts"] = contacts
         basics["location"] = ""
+        out["basics"] = basics
         out["location"] = ""
         out["contact_line"] = ""
-
-        if hasattr(core, "_generalize_companies_in_data"):
-            try:
-                core._generalize_companies_in_data(out)
-            except Exception:
-                pass
-
-        out["basics"] = basics
-
-        # Anonymize publications: replace list with summary count
-        # (skip if already anonymized by smart_anonymize_data)
-        for sec in out.get('other_sections', []):
-            if not isinstance(sec, dict):
-                continue
-            title_lower = str(sec.get('title', '')).strip().lower()
-            if any(kw in title_lower for kw in ('publication', 'paper', 'conference proceeding')):
-                items = sec.get('items', [])
-                if items and not (len(items) == 1 and str(items[0]).startswith("Author and co-author")):
-                    pub_count = len(items)
-                    if pub_count > 0:
-                        sec['items'] = [f"Author and co-author of {pub_count} publications in peer-reviewed scientific journals and conference proceedings."]
 
         return out
 
@@ -739,22 +704,8 @@ class QCVWebEngine:
         title = str(data.get("basics", {}).get("current_title", ""))
         cv_terms.update(w.lower() for w in re.findall(r'[A-Za-z#+.]{3,}', title))
 
-        # Remove common stop words
-        stop = {'the', 'and', 'for', 'with', 'from', 'that', 'this', 'are', 'was', 'were',
-                'has', 'have', 'been', 'will', 'can', 'not', 'but', 'also', 'such', 'other',
-                'all', 'any', 'each', 'our', 'you', 'your', 'their', 'them', 'who', 'what',
-                'when', 'how', 'more', 'most', 'some', 'than', 'into', 'over', 'about',
-                'experience', 'years', 'role', 'work', 'working', 'strong', 'ability',
-                'team', 'teams', 'including', 'across', 'within', 'using', 'based',
-                # Generic titles/qualifiers that match too broadly
-                'senior', 'junior', 'lead', 'manager', 'head', 'director', 'staff',
-                'full', 'high', 'time', 'level', 'new', 'key', 'well', 'good', 'best',
-                'systems', 'system', 'management', 'client', 'clients', 'project',
-                'projects', 'delivery', 'process', 'service', 'services', 'support',
-                'requirements', 'quality', 'development', 'performance', 'business',
-                'communication', 'skills', 'knowledge', 'solutions', 'environment'}
-        jd_words -= stop
-        cv_terms -= stop
+        jd_words -= _JD_STOP_WORDS
+        cv_terms -= _JD_STOP_WORDS
 
         overlap = jd_words & cv_terms
         if not jd_words or not cv_terms:
@@ -832,7 +783,7 @@ class QCVWebEngine:
         result_path = output_dir / f"{final_base_name}.docx"
 
         if not hasattr(core, "generate_docx_from_json"):
-            raise RuntimeError("cv_engine_03_48.generate_docx_from_json() not found")
+            raise RuntimeError("cv_engine.generate_docx_from_json() not found")
 
         template_path = self.templates_dir / template_name
         if not template_path.exists():
@@ -981,17 +932,11 @@ class QCVWebEngine:
             data = self._apply_autofix(data)
 
         if tailor and jd_text.strip():
-            if not force_tailor:
-                self._status(status_cb, "Checking relevance", 45)
-                relevance = self._check_relevance(data, jd_text)
-                if relevance == "LOW":
-                    raise LowRelevanceError("This CV does not appear relevant to the provided Job Description.")
-
             # Gap analysis: LLM compares CV vs JD before tailoring
             try:
                 self._status(status_cb, "Analyzing fit", 50)
                 gap_result = self._analyze_gap(data, jd_text)
-                gap_result["_output_base"] = _build_output_base_name(data, anonymize, tailor)
+                gap_result["_output_base"] = _build_output_base_name(data, anonymize=False)
                 self._last_gap_analysis = gap_result
                 if gap_ready_cb and gap_result:
                     gap_ready_cb(gap_result, copy.deepcopy(data))
