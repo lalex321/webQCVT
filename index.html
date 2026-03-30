@@ -1083,7 +1083,7 @@
       const blob = new Blob([JSON.stringify(cvJson, null, 2)], {type: "application/json"});
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      const baseName = (currentGapData && currentGapData._output_base) || "cv";
+      const baseName = (currentGapData && currentGapData._output_base) || "CV";
       a.download = baseName + "_fit.json";
       a.click();
       URL.revokeObjectURL(a.href);
