@@ -571,8 +571,9 @@
         <div id="cvPaneSkills" class="cv-tab-pane"></div>
         <div id="cvPaneOther" class="cv-tab-pane"></div>
         <div id="cvPaneExtra" class="cv-tab-pane"></div>
-        <div style="margin-top:14px;padding-top:14px;border-top:1px solid #e2e8f0;display:flex;gap:10px">
+        <div style="margin-top:14px;padding-top:14px;border-top:1px solid #e2e8f0;display:flex;gap:10px;align-items:center">
           <button id="reanalyzeBtn" class="primary" type="button" style="font-size:13px;padding:10px 20px">Save &amp; Re-analyze Fit</button>
+          <button id="editorDownloadJson" type="button" style="font-size:13px;padding:10px 20px;background:#fff;border:1px solid #cfd8e3;border-radius:14px;cursor:pointer;font-weight:700;color:#334155">Download JSON</button>
           <span id="reanalyzeStatus" style="font-size:12px;color:#64748b;align-self:center"></span>
         </div>
       </div>
@@ -1195,6 +1196,36 @@
         body: JSON.stringify(clean)
       });
     }
+
+    /* Download JSON from editor */
+    const editorDownloadJson = document.getElementById("editorDownloadJson");
+    editorDownloadJson.addEventListener("click", function() {
+      if (!cvData) return;
+      const out = JSON.parse(JSON.stringify(cvData));
+      /* Attach _fit_session if gap analysis was done */
+      if (currentGapData && tailorInput.checked) {
+        const checkedSkills = [];
+        gapSkillsBody.querySelectorAll(".gap-skill-cb").forEach(function(cb) {
+          if (cb.checked) checkedSkills.push(cb.dataset.skill);
+        });
+        out._fit_session = {
+          jd_text: jdText.value,
+          gap_analysis: currentGapData,
+          user_edits: { checked_skills: checkedSkills }
+        };
+      }
+      const blob = new Blob([JSON.stringify(out, null, 2)], {type: "application/json"});
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      const rawName = (out.basics && out.basics.name) ? out.basics.name.trim() : "";
+      const parts = rawName.split(/\s+/).filter(Boolean);
+      const name = parts.length >= 2
+        ? "CV_" + parts[0] + "_" + parts[parts.length - 1]
+        : parts.length === 1 ? "CV_" + parts[0] : "CV";
+      a.download = name + (currentGapData ? "_fit" : "") + ".json";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
 
     /* Save / Re-analyze button */
     const reanalyzeBtn = document.getElementById("reanalyzeBtn");
@@ -1820,22 +1851,16 @@
           generateBtn.classList.remove("hidden");
           topDownloadLink.classList.add("hidden");
         } else {
-          /* Switch from Download to Analyze */
-          generateBtn.disabled = false;
-          generateBtn.textContent = "Analyze";
-          generateBtn.classList.remove("hidden");
-          topDownloadLink.classList.add("hidden");
+          setPrimaryAction("idle"); /* resets to "Analyze" via updateBtnLabel */
         }
       } else {
         gapPanel.classList.add("hidden");
-        /* If job was done, restore Download; otherwise show Convert */
-        if (topDownloadLink.getAttribute("href")) {
-          generateBtn.classList.add("hidden");
-          topDownloadLink.classList.remove("hidden");
+        /* If job was done (real download href), restore Download; otherwise show Convert */
+        const doneHref = topDownloadLink.getAttribute("href");
+        if (doneHref && doneHref !== "#") {
+          setPrimaryAction("done", doneHref);
         } else {
-          generateBtn.disabled = false;
-          generateBtn.textContent = "Convert";
-          generateBtn.classList.remove("hidden");
+          setPrimaryAction("idle"); /* resets to "Convert" via updateBtnLabel */
         }
       }
       updateSaveBtn();
