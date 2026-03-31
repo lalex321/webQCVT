@@ -669,6 +669,7 @@
     let detailsPayload = null;
     let pollTimer = null;
     let pollErrorCount = 0;
+    let optionsChangedSinceJob = false;
     const POLL_MAX_ERRORS = 5;
 
     function sourceTypeLabel(file) {
@@ -941,6 +942,7 @@
       gapAnalysisReady = false;
       hasGapData = false;
       currentGapData = null;
+      optionsChangedSinceJob = false;
       cvEditorPanel.classList.add("hidden");
       cvEditorPanel.classList.remove("open");
       cvData = null; cvDataOrig = null; cvDirty = false;
@@ -1007,6 +1009,7 @@
       // Transform the main button into "Generate Tailored CV"
       gapAnalysisReady = true;
       hasGapData = true;
+      optionsChangedSinceJob = false;
       generateBtn.disabled = false;
       generateBtn.textContent = "Generate Tailored CV";
       generateBtn.classList.remove("hidden");
@@ -1017,6 +1020,7 @@
     /* Re-enable tailoring when checkboxes change */
     gapSkillsBody.addEventListener("change", function(e) {
       if (e.target.classList.contains("gap-skill-cb")) {
+        optionsChangedSinceJob = true;
         gapAnalysisReady = true;
         generateBtn.disabled = false;
         generateBtn.textContent = "Generate Tailored CV";
@@ -1163,6 +1167,7 @@
 
     function markCvDirty() {
       cvDirty = true;
+      reanalyzeBtn.disabled = false;
       gapAnalysisReady = true;
       generateBtn.disabled = false;
       generateBtn.textContent = "Generate Tailored CV";
@@ -1178,6 +1183,7 @@
         cvData = await r.json();
         cvDataOrig = JSON.parse(JSON.stringify(cvData));
         cvDirty = false;
+        reanalyzeBtn.disabled = true;
         cvEditorPanel.classList.remove("hidden");
         renderCvTab("basics");
         updateSaveBtn();
@@ -1275,8 +1281,9 @@
         reanalyzeStatus.textContent = "Saved!";
         generateBtn.disabled = false;
       }
+      cvDirty = false;
+      reanalyzeBtn.disabled = true;
       setTimeout(function() { reanalyzeStatus.textContent = ""; }, 2000);
-      reanalyzeBtn.disabled = false;
     });
 
     function renderCvTab(tab) {
@@ -1828,25 +1835,25 @@
 
     anonymizeInput.addEventListener("change", () => {
       savePrefs();
+      optionsChangedSinceJob = true;
       if (tailorInput.checked && hasGapData) {
-        gapAnalysisReady = true;
+        /* Gap data still valid — let user re-generate with new options */
         generateBtn.disabled = false;
         generateBtn.textContent = "Generate Tailored CV";
         generateBtn.classList.remove("hidden");
         topDownloadLink.classList.add("hidden");
       } else {
-        /* Option changed — need to re-generate, reset to Convert */
         setPrimaryAction("idle");
       }
     });
     tailorInput.addEventListener("change", () => {
       jdField.classList.toggle("hidden", !tailorInput.checked);
       document.getElementById("pageRoot").classList.toggle("tailor-mode", tailorInput.checked);
-      /* Show/hide gap panel based on checkbox — preserve data */
+      optionsChangedSinceJob = true;
       if (tailorInput.checked) {
         if (hasGapData) {
           gapPanel.classList.remove("hidden");
-          gapAnalysisReady = true;
+          /* Gap data still valid — let user re-generate with new options */
           generateBtn.disabled = false;
           generateBtn.textContent = "Generate Tailored CV";
           generateBtn.classList.remove("hidden");
@@ -1856,13 +1863,7 @@
         }
       } else {
         gapPanel.classList.add("hidden");
-        /* If job was done (real download href), restore Download; otherwise show Convert */
-        const doneHref = topDownloadLink.getAttribute("href");
-        if (doneHref && doneHref !== "#") {
-          setPrimaryAction("done", doneHref);
-        } else {
-          setPrimaryAction("idle"); /* resets to "Convert" via updateBtnLabel */
-        }
+        setPrimaryAction("idle");
       }
       updateSaveBtn();
       savePrefs();
@@ -1912,12 +1913,12 @@
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
 
-      // If gap analysis is ready from a live job, proceed via /continue endpoint
-      if (gapAnalysisReady && activeJobId) {
+      // If gap analysis is ready from a live paused job and options haven't changed — use /continue
+      if (gapAnalysisReady && activeJobId && !optionsChangedSinceJob) {
         proceedWithTailoring();
         return;
       }
-      // If gap analysis from preloaded JSON — fall through to normal submit with skip_gap
+      // Otherwise (preloaded JSON or options changed) — fall through to normal submit with skip_gap
 
       const file = fileInput.files[0];
       if (!file) {
@@ -1948,11 +1949,12 @@
       formData.append("tailor", tailorInput.checked ? "true" : "false");
       formData.append("jd_text", tailorInput.checked ? jdText.value : "");
       formData.append("template_name", templateSelect.value);
-      /* If user loaded a JSON with fit session, send checked skills */
-      if (preloadedFitJson && hasGapData) {
+      /* Skip gap analysis if we already have gap data (preloaded JSON or options changed after gap) */
+      if (hasGapData && tailorInput.checked && (preloadedFitJson || optionsChangedSinceJob)) {
         const fs = [];
         gapSkillsBody.querySelectorAll(".gap-skill-cb:checked").forEach(function(cb) { fs.push(cb.dataset.skill); });
         formData.append("focus_skills_json", JSON.stringify(fs));
+        formData.append("skip_gap", "true");
       }
 
       try {
@@ -1964,6 +1966,7 @@
         const data = await res.json();
         activeJobId = data.job_id;
         jobRefined = false;
+        optionsChangedSinceJob = false;
         detailsPayload = data.details || detailsPayload;
         setStatus(data.status, data.progress, "");
         pollTimer = setInterval(() => pollJob(activeJobId), 1500);
