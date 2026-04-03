@@ -754,14 +754,18 @@ async def create_job(
     if tailor and not jd_text.strip():
         raise HTTPException(status_code=400, detail="Job description is required when tailoring is enabled.")
 
+    source_key = build_source_key(source_path) if suffix != ".json" else None
+
+    # Skip if already in store (batch import dedup)
+    if source_key and not tailor and (STORE_DIR / f"{source_key}.json").exists():
+        return {"job_id": "skip", "status": "Done", "progress": 100, "already_in_store": True}
+
     job = jobs.create(
         file.filename or "uploaded_file",
         anonymize=anonymize,
         autofix=autofix,
         template_name=template_name,
     )
-
-    source_key = build_source_key(source_path) if suffix != ".json" else None
 
     details = _build_processing_details(
         source_name=file.filename or source_path.name,

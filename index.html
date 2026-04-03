@@ -96,12 +96,13 @@
     .page-tab-btn.active{color:var(--primary);background:rgba(255,255,255,.85);border-color:#c8d3e0}
     .page-tab-btn:hover:not(.active){color:#475569;background:rgba(255,255,255,.4)}
     .page-tab-content{flex:1;min-width:0;border-top:1px solid #c8d3e0}
-    .page-pane.hidden{display:none}
+    .page-pane.hidden{display:none!important}
+    #paneBatch{display:flex;flex-direction:column;max-height:80vh}
     .prompt-editor-area{width:100%;min-height:400px;font-family:'SF Mono',Menlo,Consolas,monospace;font-size:12px;line-height:1.5;padding:12px;border:1px solid #c8d3e0;border-radius:10px;resize:vertical;background:#fff}
     .prompt-select{padding:8px 12px;border:1px solid #c8d3e0;border-radius:10px;font-size:13px;font-weight:600;margin-bottom:12px}
     .prompt-status{font-size:13px;margin-top:8px;color:#64748b}
     /* Batch tab */
-    .batch-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+    .batch-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:0;flex-wrap:wrap;padding:12px 0 8px}
     .batch-search{flex:1;min-width:180px;padding:6px 10px;border:1px solid #c8d3e0;border-radius:8px;font-size:13px}
     .batch-btn{padding:5px 14px;border:1px solid #c8d3e0;border-radius:8px;background:#fff;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
     .batch-btn:hover:not(:disabled){background:var(--soft);border-color:var(--primary);color:var(--primary)}
@@ -109,11 +110,11 @@
     .batch-btn.danger{color:#dc2626}
     .batch-btn.danger:hover:not(:disabled){background:#fef2f2;border-color:#dc2626}
     .batch-table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}
-    .batch-table th{text-align:left;padding:6px 10px;border-bottom:2px solid #c8d3e0;font-weight:700;color:#475569;cursor:pointer;user-select:none;font-size:12px;white-space:nowrap;position:relative;overflow:hidden}
+    .batch-table th{text-align:left;padding:6px 10px;border-bottom:2px solid #c8d3e0;font-weight:700;color:#475569;cursor:pointer;user-select:none;font-size:12px;white-space:nowrap;position:sticky;top:0;background:rgba(255,255,255,.97);z-index:4;overflow:hidden}
     .col-resize{position:absolute;right:0;top:0;bottom:0;width:5px;cursor:col-resize;z-index:2}
     .col-resize:hover,.col-resize.active{background:rgba(99,102,241,.25)}
     .batch-table th:hover{color:var(--primary)}
-    .batch-table td{padding:6px 10px;border-bottom:1px solid #e8ecf1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px}
+    .batch-table td{padding:6px 10px;border-bottom:1px solid #e8ecf1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .batch-table tr:hover{background:rgba(99,102,241,.04)}
     .batch-table .sort-arrow{font-size:10px;margin-left:3px;color:#94a3b8}
     .batch-empty{padding:40px 0;text-align:center;color:#94a3b8;font-size:14px}
@@ -653,14 +654,19 @@
     </div>
 
     <div class="page-pane hidden" id="paneBatch">
-      <div style="padding:18px 24px">
+      <div style="padding:12px 24px 0">
         <div class="batch-toolbar">
-          <input id="batchSearch" class="batch-search" type="text" placeholder="Search by name, role, company…" />
-          <select id="batchTemplate" class="prompt-select" style="margin-bottom:0"></select>
+          <button id="batchImport" class="batch-btn" style="background:var(--primary);color:#fff;border-color:var(--primary)">Import CVs</button>
+          <input id="batchFileInput" type="file" multiple accept=".pdf,.docx,.png,.jpg,.jpeg" style="display:none" />
+          <input id="batchSearch" class="batch-search" type="text" placeholder="Search…" />
+          <select id="batchTemplate" class="prompt-select" style="margin-bottom:0;max-width:160px"></select>
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:#475569"><input id="batchAnonymize" type="checkbox" /> Anonymize</label>
           <button id="batchGenerate" class="batch-btn" disabled>Generate</button>
           <button id="batchDelete" class="batch-btn danger" disabled>Delete</button>
+          <span id="batchCount" style="margin-left:auto;font-size:11px;color:#94a3b8;white-space:nowrap"></span>
         </div>
+      </div>
+      <div style="flex:1;overflow:auto;padding:0 24px 18px">
         <table class="batch-table" id="batchTable">
           <thead>
             <tr>
@@ -674,10 +680,6 @@
           <tbody id="batchBody"></tbody>
         </table>
         <div id="batchEmpty" class="batch-empty">No stored CVs yet. Convert a CV on the Convert tab first.</div>
-        <div id="batchJobsPanel" class="batch-jobs-panel hidden">
-          <strong style="font-size:13px">Batch Jobs</strong>
-          <div id="batchJobsList"></div>
-        </div>
       </div>
     </div>
 
@@ -1170,10 +1172,11 @@
 
     /* ── Column resize for gap table ── */
     (function() {
+      var gapTable = document.querySelector(".gap-table");
       var ths = document.querySelectorAll(".gap-table th");
-      var savedWidths = JSON.parse(localStorage.getItem("gapColWidths") || "{}");
+      var savedWidths = JSON.parse(localStorage.getItem("gapColPct") || "{}");
       ths.forEach(function(th, i) {
-        if (savedWidths[i]) th.style.width = savedWidths[i] + "px";
+        if (savedWidths[i]) th.style.width = savedWidths[i] + "%";
         var grip = document.createElement("div");
         grip.className = "col-resize";
         th.appendChild(grip);
@@ -1181,15 +1184,16 @@
           e.preventDefault();
           e.stopPropagation();
           grip.classList.add("active");
-          var startX = e.clientX, startW = th.offsetWidth;
-          function onMove(e2) { th.style.width = Math.max(30, startW + e2.clientX - startX) + "px"; }
+          var startX = e.clientX, startW = th.offsetWidth, tableW = gapTable.offsetWidth;
+          function onMove(e2) { th.style.width = (Math.max(30, startW + e2.clientX - startX) / tableW * 100) + "%"; }
           function onUp() {
             grip.classList.remove("active");
             document.removeEventListener("mousemove", onMove);
             document.removeEventListener("mouseup", onUp);
-            var widths = {};
-            ths.forEach(function(t, j) { widths[j] = t.offsetWidth; });
-            localStorage.setItem("gapColWidths", JSON.stringify(widths));
+            var tw = gapTable.offsetWidth;
+            var pcts = {};
+            ths.forEach(function(t, j) { pcts[j] = +(t.offsetWidth / tw * 100).toFixed(2); });
+            localStorage.setItem("gapColPct", JSON.stringify(pcts));
           }
           document.addEventListener("mousemove", onMove);
           document.addEventListener("mouseup", onUp);
@@ -2209,14 +2213,12 @@
     });
 
     /* ── Batch Tab ── */
-    let batchData = [], batchFiltered = [], batchSortCol = "date", batchSortAsc = false, batchLoaded = false;
+    let batchData = [], batchFiltered = [], batchSortCol = "date", batchSortAsc = false, batchLoaded = false, batchLastChecked = null;
     const batchBody = document.getElementById("batchBody");
     const batchEmpty = document.getElementById("batchEmpty");
     const batchSelectAll = document.getElementById("batchSelectAll");
     const batchSearch = document.getElementById("batchSearch");
     const batchTemplate = document.getElementById("batchTemplate");
-    const batchJobsPanel = document.getElementById("batchJobsPanel");
-    const batchJobsList = document.getElementById("batchJobsList");
     const batchAnonCheck = document.getElementById("batchAnonymize");
     const batchBtns = {
       generate: document.getElementById("batchGenerate"),
@@ -2256,6 +2258,10 @@
       batchBody.innerHTML = "";
       batchEmpty.style.display = batchFiltered.length ? "none" : "";
       document.getElementById("batchTable").style.display = batchFiltered.length ? "" : "none";
+      var countEl = document.getElementById("batchCount");
+      countEl.textContent = batchFiltered.length === batchData.length
+        ? batchData.length + " CVs"
+        : batchFiltered.length + " / " + batchData.length + " CVs";
       batchFiltered.forEach(function(m) {
         var tr = document.createElement("tr");
         var dt = m.date ? m.date.substring(0, 10) : "";
@@ -2265,14 +2271,25 @@
           + '<td>' + esc(m.role) + '</td>'
           + '<td>' + esc(m.company) + '</td>'
           + '<td>' + esc(dt) + '</td>';
-        tr.querySelector("input").addEventListener("change", updateBatchBtns);
-        if (m.tailored) {
-          tr.classList.add("clickable");
-          tr.addEventListener("click", function(e) {
-            if (e.target.tagName === "INPUT") return; // don't trigger on checkbox
-            openStoredTailorSession(m.id);
-          });
-        }
+        var cb = tr.querySelector("input");
+        cb.addEventListener("click", function(e) {
+          var allCbs = Array.from(batchBody.querySelectorAll("input[type=checkbox]"));
+          if (e.shiftKey && batchLastChecked !== null) {
+            var from = allCbs.indexOf(batchLastChecked);
+            var to = allCbs.indexOf(cb);
+            var start = Math.min(from, to), end = Math.max(from, to);
+            var state = batchLastChecked.checked;
+            for (var j = start; j <= end; j++) allCbs[j].checked = state;
+          }
+          batchLastChecked = cb;
+          updateBatchBtns();
+        });
+        tr.classList.add("clickable");
+        tr.addEventListener("click", function(e) {
+          if (e.target.tagName === "INPUT") return;
+          if (m.tailored) { openStoredTailorSession(m.id); }
+          else { openStoredCv(m.id); }
+        });
         batchBody.appendChild(tr);
       });
       batchSelectAll.checked = false;
@@ -2330,33 +2347,33 @@
 
     /* ── Column resize for batch table ── */
     (function() {
+      var table = document.getElementById("batchTable");
       var ths = document.querySelectorAll("#batchTable th");
-      var savedWidths = JSON.parse(localStorage.getItem("batchColWidths") || "{}");
+      var savedWidths = JSON.parse(localStorage.getItem("batchColPct") || "{}");
       ths.forEach(function(th, i) {
-        // Restore saved widths
-        if (savedWidths[i]) th.style.width = savedWidths[i] + "px";
-        // Add resize handle (skip checkbox column)
+        if (savedWidths[i]) th.style.width = savedWidths[i] + "%";
         var grip = document.createElement("div");
         grip.className = "col-resize";
         th.appendChild(grip);
         grip.addEventListener("mousedown", function(e) {
           e.preventDefault();
-          e.stopPropagation(); // don't trigger sort
+          e.stopPropagation();
           grip.classList.add("active");
           var startX = e.clientX;
           var startW = th.offsetWidth;
+          var tableW = table.offsetWidth;
           function onMove(e2) {
             var w = Math.max(30, startW + e2.clientX - startX);
-            th.style.width = w + "px";
+            th.style.width = (w / tableW * 100) + "%";
           }
           function onUp() {
             grip.classList.remove("active");
             document.removeEventListener("mousemove", onMove);
             document.removeEventListener("mouseup", onUp);
-            // Save all widths
-            var widths = {};
-            ths.forEach(function(t, j) { widths[j] = t.offsetWidth; });
-            localStorage.setItem("batchColWidths", JSON.stringify(widths));
+            var tw = table.offsetWidth;
+            var pcts = {};
+            ths.forEach(function(t, j) { pcts[j] = +(t.offsetWidth / tw * 100).toFixed(2); });
+            localStorage.setItem("batchColPct", JSON.stringify(pcts));
           }
           document.addEventListener("mousemove", onMove);
           document.addEventListener("mouseup", onUp);
@@ -2379,49 +2396,154 @@
       var r = await fetch("/store/batch", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload) });
       var data = await r.json();
       if (!data.jobs || !data.jobs.length) return;
-      batchJobsPanel.classList.remove("hidden");
-      batchJobsList.innerHTML = "";
-      data.jobs.forEach(function(j) {
-        var row = document.createElement("div");
-        row.className = "batch-job-row";
-        row.dataset.jobId = j.job_id;
-        row.innerHTML = '<span>' + esc(j.store_id.substring(0, 8)) + '</span>'
-          + '<span class="status working">Working…</span>'
-          + '<a class="dl-link" style="display:none" href="#">Download</a>';
-        batchJobsList.appendChild(row);
-      });
-      pollBatchJobs(data.jobs.map(function(j) { return j.job_id; }));
+      appLog("Batch " + action + ": " + data.jobs.length + " job(s) started");
+      pollBatchJobs(data.jobs.map(function(j) { return j.job_id; }), action === "generate" || action === "anonymize");
     }
 
-    function pollBatchJobs(jobIds) {
+    function triggerDownload(url) {
+      var a = document.createElement("a");
+      a.href = url;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function() { document.body.removeChild(a); }, 1000);
+    }
+
+    function pollBatchJobs(jobIds, autoDownload) {
       var remaining = new Set(jobIds);
+      var done = 0, failed = 0, total = jobIds.length;
+      batchBtns.generate.disabled = true;
+      batchBtns.generate.textContent = "0/" + total + "…";
       var iv = setInterval(async function() {
         for (var jid of Array.from(remaining)) {
           try {
             var r = await fetch("/jobs/" + jid);
             var d = await r.json();
-            var row = batchJobsList.querySelector('[data-job-id="' + jid + '"]');
-            if (!row) continue;
-            var st = row.querySelector(".status");
-            if (d.status === "Done") {
-              st.textContent = "Done"; st.className = "status done";
-              var dl = row.querySelector(".dl-link");
-              dl.href = "/jobs/" + jid + "/download"; dl.style.display = "";
-              remaining.delete(jid);
+            if (d.status === "Done" || d.ready) {
+              done++; remaining.delete(jid);
+              appLog("Batch job done: " + jid);
+              if (autoDownload) {
+                triggerDownload("/jobs/" + jid + "/download");
+              }
             } else if (d.status === "Failed") {
-              st.textContent = "Failed"; st.className = "status failed";
-              remaining.delete(jid);
-            } else {
-              st.textContent = d.status + " " + (d.progress || 0) + "%";
+              failed++; remaining.delete(jid);
+              appLog("Batch job failed: " + (d.error || jid), "error");
             }
           } catch(e) {}
         }
-        if (!remaining.size) clearInterval(iv);
+        batchBtns.generate.textContent = done + "/" + total + "…";
+        if (!remaining.size) {
+          clearInterval(iv);
+          batchBtns.generate.textContent = "Generate";
+          updateBatchBtns();
+          appLog("Batch complete: " + done + " done" + (failed ? ", " + failed + " failed" : ""));
+        }
       }, 1500);
     }
 
     batchBtns.generate.addEventListener("click", function() { batchAction("generate", { anonymize: batchAnonCheck.checked }); });
     batchBtns.del.addEventListener("click", function() { batchAction("delete"); });
+
+    /* ── Batch Import CVs ── */
+    var batchImportBtn = document.getElementById("batchImport");
+    var batchFileInput = document.getElementById("batchFileInput");
+    batchImportBtn.addEventListener("click", function() { batchFileInput.click(); });
+    batchFileInput.addEventListener("change", async function() {
+      var files = Array.from(batchFileInput.files);
+      if (!files.length) return;
+      batchFileInput.value = "";
+      var tpl = batchTemplate.value;
+      if (!tpl) { alert("Select a template first."); return; }
+      appLog("Batch import: " + files.length + " file(s)");
+      batchImportBtn.disabled = true;
+      batchImportBtn.textContent = "Importing...";
+      var jobIds = [];
+      for (var i = 0; i < files.length; i++) {
+        var f = files[i];
+        var fd = new FormData();
+        fd.append("file", f);
+        fd.append("template_name", tpl);
+        fd.append("anonymize", "false");
+        fd.append("autofix", "false");
+        fd.append("tailor", "false");
+        fd.append("jd_text", "");
+        try {
+          var r = await fetch("/jobs", { method: "POST", body: fd });
+          if (!r.ok) { appLog("Import failed: " + f.name, "error"); continue; }
+          var d = await r.json();
+          if (d.already_in_store) { appLog("Skipped (already imported): " + f.name); continue; }
+          jobIds.push(d.job_id);
+          appLog("Importing: " + f.name);
+        } catch (e) {
+          appLog("Import error: " + f.name + " " + e.message, "error");
+        }
+      }
+      batchImportBtn.disabled = false;
+      batchImportBtn.textContent = "Import CVs";
+      if (jobIds.length) pollBatchImport(jobIds);
+    });
+
+    function pollBatchImport(jobIds) {
+      var remaining = new Set(jobIds);
+      var done = 0, failed = 0, total = jobIds.length;
+      var iv = setInterval(async function() {
+        for (var jid of Array.from(remaining)) {
+          try {
+            var r = await fetch("/jobs/" + jid);
+            var d = await r.json();
+            if (d.status === "Done" || d.ready) {
+              done++; remaining.delete(jid);
+            } else if (d.status === "Failed") {
+              failed++; remaining.delete(jid);
+              appLog("Import failed: " + (d.error || jid), "error");
+            }
+          } catch(e) {}
+        }
+        if (!remaining.size) {
+          clearInterval(iv);
+          appLog("Import complete: " + done + " done" + (failed ? ", " + failed + " failed" : "") + " of " + total);
+          loadBatchStore();
+        }
+      }, 1500);
+    }
+
+    async function openStoredCv(storeId) {
+      try {
+        var r = await fetch("/store/" + storeId);
+        if (!r.ok) { alert("Failed to load stored CV"); return; }
+        var data = await r.json();
+
+        // Build CV JSON (strip _meta and _tailor_session)
+        var cv = {};
+        for (var k in data) { if (k !== "_meta" && k !== "_tailor_session") cv[k] = data[k]; }
+
+        // Switch to Convert tab
+        document.querySelectorAll(".page-tab-btn").forEach(function(b) { b.classList.remove("active"); });
+        document.querySelectorAll(".page-pane").forEach(function(p) { p.classList.add("hidden"); });
+        document.querySelector('[data-pane="paneConvert"]').classList.add("active");
+        document.getElementById("paneConvert").classList.remove("hidden");
+
+        // Load CV into editor
+        cvData = cv;
+        cvDataOrig = JSON.parse(JSON.stringify(cv));
+        cvDirty = false;
+        cvEditorPanel.classList.remove("hidden");
+        renderCvTab("basics");
+        updateBtnLabel();
+        updateSaveBtn();
+
+        // Create synthetic JSON file for form submission
+        var blob = new Blob([JSON.stringify(cv)], { type: "application/json" });
+        var dt = new DataTransfer();
+        var name = (data._meta && data._meta.name || "CV").replace(/\s+/g, "_") + ".json";
+        dt.items.add(new File([blob], name, { type: "application/json" }));
+        fileInput.files = dt.files;
+
+        appLog("Loaded CV from store: " + (data._meta && data._meta.name || storeId.substring(0, 8)));
+      } catch (e) {
+        alert("Error: " + e.message);
+      }
+    }
 
     async function openStoredTailorSession(storeId) {
       appLog("Opening stored tailor session: " + storeId.substring(0, 8));
