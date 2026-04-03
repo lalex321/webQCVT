@@ -532,7 +532,11 @@ def _update_store_tailor(store_id: str, tailored_json: dict, jd_text: str,
     """Update an existing store entry with tailoring session data."""
     p = STORE_DIR / f"{store_id}.json"
     if not p.exists():
-        return
+        # Try to find by candidate name (covers JSON upload where sid differs)
+        name = tailored_json.get("basics", {}).get("name", "")
+        p = _find_store_by_name(name)
+        if not p:
+            return
     data = json.loads(p.read_text(encoding="utf-8"))
     data["_tailor_session"] = {
         "tailored_json": tailored_json,
