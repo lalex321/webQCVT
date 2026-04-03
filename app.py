@@ -490,9 +490,27 @@ def _build_processing_details(
 
 ## ── CV Store helpers ─────────────────────────────────────────────────
 
+def _find_store_by_name(name: str) -> Path | None:
+    """Check if a CV with this name already exists in store."""
+    if not name:
+        return None
+    for p in STORE_DIR.glob("*.json"):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if data.get("_meta", {}).get("name", "").lower() == name.lower():
+                return p
+        except Exception:
+            continue
+    return None
+
+
 def _save_to_store(store_id: str, cv_json: dict, source_filename: str) -> None:
     """Persist extracted CV JSON with metadata to _store/."""
     basics = cv_json.get("basics", {})
+    # Dedup by name: if same person already in store, skip
+    existing = _find_store_by_name(basics.get("name", ""))
+    if existing and existing.stem != store_id:
+        return
     exp = cv_json.get("experience", [])
     meta = {
         "id": store_id,
