@@ -173,14 +173,17 @@ def _build_output_base_name(data: dict, anonymize: bool, tailor: bool = False, f
 
 def _repair_json(s: str) -> str:
     """Best-effort repair of common LLM JSON errors."""
+    # Remove control characters except \n \r \t
+    s = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', s)
+    # Fix single quotes → double quotes (outside of already double-quoted strings)
+    s = re.sub(r"(?<![\"\\])'([^']*)'(?!\")", r'"\1"', s)
     # Fix trailing commas before } or ]
     s = re.sub(r',\s*([}\]])', r'\1', s)
     # Fix missing commas between } and { or between "value" and "key"
     s = re.sub(r'(\})\s*(\{)', r'\1,\2', s)
     s = re.sub(r'(")\s*\n\s*(")', r'\1,\n\2', s)
-    # Fix unescaped newlines inside strings (common with multiline highlights)
-    # Remove control characters except \n \r \t
-    s = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', s)
+    # Fix unquoted keys: word followed by colon
+    s = re.sub(r'(?<=[\{,\n])\s*([a-zA-Z_]\w*)\s*:', r' "\1":', s)
     return s
 
 def extract_first_json_object(text: str):
@@ -219,8 +222,22 @@ def extract_first_json_object(text: str):
         pass
 
     # Last resort: try raw_decode on repaired text
-    obj, _ = decoder.raw_decode(repaired)
-    return obj
+    try:
+        obj, _ = decoder.raw_decode(repaired)
+        return obj
+    except json.JSONDecodeError:
+        pass
+
+    # Final fallback: json_repair library
+    try:
+        from json_repair import repair_json
+        fixed = repair_json(s[start:], return_objects=True)
+        if isinstance(fixed, (dict, list)):
+            return fixed
+    except Exception:
+        pass
+
+    raise ValueError("Could not parse JSON from LLM response")
 
 
 def read_source_text(source_path: Path | str) -> str:
