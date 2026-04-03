@@ -2523,11 +2523,20 @@
         var cv = {};
         for (var k in data) { if (k !== "_meta" && k !== "_tailor_session") cv[k] = data[k]; }
 
-        // Switch to Convert tab
+        // Switch to Convert tab and reset state
         document.querySelectorAll(".page-tab-btn").forEach(function(b) { b.classList.remove("active"); });
         document.querySelectorAll(".page-pane").forEach(function(p) { p.classList.add("hidden"); });
         document.querySelector('[data-pane="paneConvert"]').classList.add("active");
         document.getElementById("paneConvert").classList.remove("hidden");
+        stopPolling();
+        activeJobId = null;
+        gapAnalysisReady = false;
+        hasGapData = false;
+        currentGapData = null;
+        gapPanel.classList.add("hidden");
+        setPrimaryAction("idle");
+        errorText.textContent = "";
+        statusBox.style.display = "none";
 
         // Load CV into editor
         cvData = cv;
@@ -2564,11 +2573,15 @@
         var cv = {};
         for (var k in data) { if (k !== "_meta" && k !== "_tailor_session") cv[k] = data[k]; }
 
-        // Switch to Convert tab
+        // Switch to Convert tab and reset state
         document.querySelectorAll(".page-tab-btn").forEach(function(b) { b.classList.remove("active"); });
         document.querySelectorAll(".page-pane").forEach(function(p) { p.classList.add("hidden"); });
         document.querySelector('[data-pane="paneConvert"]').classList.add("active");
         document.getElementById("paneConvert").classList.remove("hidden");
+        stopPolling();
+        activeJobId = null;
+        errorText.textContent = "";
+        statusBox.style.display = "none";
 
         // Enable tailor mode and fill JD
         tailorInput.checked = true;
