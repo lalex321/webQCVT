@@ -91,6 +91,7 @@ def _backfill_search_text():
             continue
 
 _backfill_search_text()
+# Cache will be initialized lazily on first _list_store() call
 
 
 def append_usage(event: dict) -> None:
@@ -315,6 +316,7 @@ def delete_store_item(store_id: str):
     if not p.exists():
         raise HTTPException(status_code=404, detail="Not found")
     p.unlink()
+    _store_cache_remove(store_id)
     return {"ok": True}
 
 
@@ -335,6 +337,9 @@ async def update_store_meta(store_id: str, request: Request):
         data = json.loads(p.read_text(encoding="utf-8"))
         data["_meta"][field] = value
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        cached = _store_cache_get_meta(store_id)
+        if cached:
+            cached[field] = value
     return {"ok": True}
 
 
@@ -359,6 +364,7 @@ async def batch_store_action(request: Request):
             p = STORE_DIR / f"{sid}.json"
             if p.exists():
                 p.unlink()
+                _store_cache_remove(sid)
                 deleted += 1
         return {"ok": True, "deleted": deleted}
 
@@ -551,6 +557,46 @@ def _build_processing_details(
 
 ## ── CV Store helpers ─────────────────────────────────────────────────
 
+# In-memory cache of _meta dicts — avoids reading all JSON files on every /store request
+_store_cache: list[dict] = []
+_store_cache_ready = False
+
+def _store_cache_init():
+    """Load all _meta from store files into cache. Called once at startup."""
+    global _store_cache_ready
+    for p in STORE_DIR.glob("*.json"):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            meta = data.get("_meta", {})
+            meta["id"] = p.stem
+            _store_cache.append(meta)
+        except Exception:
+            continue
+    _store_cache.sort(key=lambda m: m.get("date", ""), reverse=True)
+    _store_cache_ready = True
+
+def _store_cache_upsert(meta: dict):
+    """Add or update a meta entry in the cache."""
+    sid = meta.get("id", "")
+    for i, m in enumerate(_store_cache):
+        if m.get("id") == sid:
+            _store_cache[i] = meta
+            return
+    _store_cache.append(meta)
+
+def _store_cache_remove(store_id: str):
+    """Remove an entry from the cache."""
+    global _store_cache
+    _store_cache = [m for m in _store_cache if m.get("id") != store_id]
+
+def _store_cache_get_meta(store_id: str) -> dict | None:
+    """Get cached meta by ID."""
+    for m in _store_cache:
+        if m.get("id") == store_id:
+            return m
+    return None
+
+
 def _find_store_by_name(name: str) -> Path | None:
     """Check if a CV with this name already exists in store."""
     if not name:
@@ -606,6 +652,7 @@ def _save_to_store(store_id: str, cv_json: dict, source_filename: str) -> None:
         (STORE_DIR / f"{store_id}.json").write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        _store_cache_upsert(dict(meta))
 
 
 def _save_store_gap(store_id: str, gap_analysis: dict, jd_text: str, base_json: dict = None) -> None:
@@ -626,7 +673,9 @@ def _save_store_gap(store_id: str, gap_analysis: dict, jd_text: str, base_json: 
         data["_meta"]["analyzed"] = True
         data["_meta"]["match_pct"] = int(gap_analysis.get("match_percentage", 0))
         data["_meta"]["date"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        data["_meta"]["id"] = p.stem
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        _store_cache_upsert(dict(data["_meta"]))
 
 
 def _update_store_tailor(store_id: str, tailored_json: dict, jd_text: str,
@@ -654,22 +703,16 @@ def _update_store_tailor(store_id: str, tailored_json: dict, jd_text: str,
     # Keep gap analysis match_percentage (consistent with Fit Report on Convert tab)
     if gap_analysis and gap_analysis.get("match_percentage"):
         data["_meta"]["match_pct"] = int(gap_analysis["match_percentage"])
+    data["_meta"]["id"] = p.stem
     p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _store_cache_upsert(dict(data["_meta"]))
 
 
 def _list_store() -> list[dict]:
-    """Return list of _meta dicts for all stored CVs."""
-    items = []
-    for p in STORE_DIR.glob("*.json"):
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            meta = data.get("_meta", {})
-            meta["id"] = p.stem
-            items.append(meta)
-        except Exception:
-            continue
-    items.sort(key=lambda m: m.get("date", ""), reverse=True)
-    return items
+    """Return list of _meta dicts for all stored CVs (from cache)."""
+    if not _store_cache_ready:
+        _store_cache_init()
+    return sorted(_store_cache, key=lambda m: m.get("date", ""), reverse=True)
 
 
 def _load_store_cv(store_id: str) -> dict | None:
