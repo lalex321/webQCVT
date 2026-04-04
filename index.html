@@ -30,10 +30,16 @@
       padding:0 16px;
       position:relative;
     }
-    .resize-handle{
-      position:absolute;right:-6px;top:0;bottom:0;width:12px;cursor:col-resize;z-index:10;
+    .resize-handle,.resize-handle-l{
+      position:absolute;top:0;bottom:0;width:12px;cursor:col-resize;z-index:10;
     }
-    .resize-handle:hover,.resize-handle.active{background:rgba(99,102,241,.12);border-radius:4px}
+    .resize-handle{right:-6px}
+    .resize-handle-l{left:-6px}
+    .resize-handle:hover,.resize-handle.active,.resize-handle-l:hover,.resize-handle-l.active{background:rgba(99,102,241,.12);border-radius:4px}
+    .resize-handle-v{
+      position:absolute;left:0;right:0;bottom:-6px;height:12px;cursor:row-resize;z-index:10;
+    }
+    .resize-handle-v:hover,.resize-handle-v.active{background:rgba(99,102,241,.12);border-radius:4px}
     .topbar{
       display:flex;
       align-items:center;
@@ -97,7 +103,17 @@
     .page-tab-btn:hover:not(.active){color:#475569;background:rgba(255,255,255,.4)}
     .page-tab-content{flex:1;min-width:0;border-top:1px solid #c8d3e0}
     .page-pane.hidden{display:none!important}
-    #paneBatch{display:flex;flex-direction:column;max-height:80vh}
+    .convert-pane{display:flex;flex-direction:column;max-height:var(--pane-height,80vh)}
+    .convert-pane .shell{flex-shrink:0}
+    .convert-scroll{flex:1;overflow:auto;padding:0 0 8px}
+    .global-statusbar{display:flex;align-items:center;gap:10px;padding:4px 18px;border-top:1px solid #c8d3e0;background:#f8fafc;font-size:12px;color:#64748b;min-height:24px;position:relative;border-radius:0 0 18px 18px}
+    .statusbar-progress{position:absolute;left:0;top:0;height:3px;width:100%;background:#e2e8f0;overflow:hidden}
+    .statusbar-bar{height:100%;width:0%;background:var(--primary);transition:width .3s}
+    .statusbar-status{font-weight:600;color:#475569}
+    .statusbar-error{color:#dc2626}
+    .statusbar-file{margin-left:auto;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:250px}
+    .statusbar-details{background:none;border:none;color:var(--primary);cursor:pointer;font-size:11px;font-weight:600;padding:0}
+    #paneBatch{display:flex;flex-direction:column;max-height:var(--pane-height,80vh)}
     .prompt-editor-area{width:100%;min-height:400px;font-family:'SF Mono',Menlo,Consolas,monospace;font-size:12px;line-height:1.5;padding:12px;border:1px solid #c8d3e0;border-radius:10px;resize:vertical;background:#fff}
     .prompt-select{padding:8px 12px;border:1px solid #c8d3e0;border-radius:10px;font-size:13px;font-weight:600;margin-bottom:12px}
     .prompt-status{font-size:13px;margin-top:8px;color:#64748b}
@@ -114,6 +130,10 @@
     .col-resize{position:absolute;right:0;top:0;bottom:0;width:5px;cursor:col-resize;z-index:2}
     .col-resize:hover,.col-resize.active{background:rgba(99,102,241,.25)}
     .draggable-th{cursor:grab}
+    .name-cell{cursor:pointer}
+    .name-cell:hover{color:var(--primary);text-decoration:underline}
+    .editable-cell{cursor:text;min-width:60px}
+    .editable-cell:hover{background:rgba(99,102,241,.06)}
     .draggable-th.dragging{opacity:.4}
     .draggable-th.drag-over{border-left:2px solid var(--primary)}
     .batch-table th:hover{color:var(--primary)}
@@ -502,6 +522,8 @@
 <body>
   <div class="page" id="pageRoot">
     <div class="resize-handle" id="resizeHandle"></div>
+    <div class="resize-handle-l" id="resizeHandleL"></div>
+    <div class="resize-handle-v" id="resizeHandleV"></div>
     <div class="topbar">
       <img class="brand-logo" src="/images/Quantori_logo.png" alt="Quantori" />
       <div>Quantori </div>
@@ -521,7 +543,7 @@
         <button class="page-tab-btn" data-pane="panePrompt">Prompt</button>
       </div>
       <div class="page-tab-content">
-      <div class="page-pane" id="paneConvert">
+      <div class="page-pane convert-pane" id="paneConvert">
     <div class="shell">
       <div class="left">
         <h1>Convert and tailor CV into the Quantori format.</h1>
@@ -535,15 +557,6 @@
           <li>Single-step generation and download</li>
         </ul>
 
-        <div id="statusBox" class="status-box">
-          <div class="status-line">
-            <div class="status-title">Processing</div>
-            <div id="statusValue" class="status-value">Queued</div>
-          </div>
-          <div class="progress"><div id="progressBar" class="bar"></div></div>
-          <div id="errorText" class="error"></div>
-          <button id="detailsBtn" class="details-link hidden" type="button" style="display:none">Show details</button>
-        </div>
       </div>
 
       <div class="right">
@@ -580,6 +593,7 @@
       </div>
     </div>
 
+    <div class="convert-scroll">
     <div id="jdField" class="jd-fullwidth hidden">
       <label for="jdText" style="font-size:15px;font-weight:800;margin-bottom:5px;color:#334155;display:block">Job Description</label>
       <textarea id="jdText" rows="8" placeholder="Paste the job description here..." class="jd-collapsed" style="display:block;width:100%;padding:11px 14px;border:1px solid #cfd8e3;border-radius:18px;background:#fff;color:#111827;font-size:15px;font-family:inherit;resize:vertical;min-height:140px;"></textarea>
@@ -637,6 +651,7 @@
         </div>
       </div>
     </div>
+    </div><!-- /scroll-area -->
     </div><!-- /paneConvert -->
 
     <div class="page-pane hidden" id="panePrompt">
@@ -693,6 +708,13 @@
 
       </div><!-- /page-tab-content -->
     </div><!-- /page-tabs -->
+    <div id="globalStatusBar" class="global-statusbar">
+      <div class="statusbar-progress"><div id="progressBar" class="statusbar-bar"></div></div>
+      <span id="statusValue" class="statusbar-status">Ready</span>
+      <span id="errorText" class="statusbar-error"></span>
+      <span id="statusBarFile" class="statusbar-file"></span>
+      <button id="detailsBtn" class="statusbar-details hidden" type="button">Details</button>
+    </div>
     </div><!-- /main-card -->
   </div>
 
@@ -753,7 +775,8 @@
     const generateBtn = document.getElementById("generateBtn");
     const topDownloadLink = document.getElementById("topDownloadLink");
 
-    const statusBox = document.getElementById("statusBox");
+    const globalStatusBar = document.getElementById("globalStatusBar");
+    const statusBarFile = document.getElementById("statusBarFile");
     const statusValue = document.getElementById("statusValue");
     const progressBar = document.getElementById("progressBar");
     const errorText = document.getElementById("errorText");
@@ -1056,7 +1079,8 @@
       detailsBtn.classList.add("hidden");
       closeDetailsModal();
       setPrimaryAction("idle");
-      setStatus("Queued", 0, "");
+      setStatus("Ready", 0, "");
+      statusBarFile.textContent = "";
       pollErrorCount = 0;
       gapPanel.classList.add("hidden");
       gapAnalysisReady = false;
@@ -1125,7 +1149,7 @@
         gapSkillsBody.appendChild(tr);
       });
 
-      statusBox.style.display = "none";
+      statusValue.textContent = "Ready"; progressBar.style.width = "0%";
       gapPanel.classList.remove("hidden");
       // Transform the main button into "Generate Tailored CV"
       gapAnalysisReady = true;
@@ -1852,7 +1876,8 @@
           return;
         }
         gapAnalysisReady = false;
-        statusBox.style.display = "block";
+        hasGapData = false;
+        /* statusbar always visible */
         setStatus("Tailoring to JD", 60, "");
         setPrimaryAction("running");
         pollTimer = setInterval(function() { pollJob(activeJobId); }, 1500);
@@ -1905,6 +1930,7 @@
           stopPolling();
           appLog("Job failed: " + (data.error || "unknown"), "error");
           setPrimaryAction("failed");
+          return;
         }
 
         if (data.status === "Low Relevance") {
@@ -2097,12 +2123,22 @@
 
       savePrefs();
       stopPolling();
+      /* Cancel previous pending job to free semaphore slot */
+      if (activeJobId) {
+        fetch("/jobs/" + activeJobId + "/cancel", { method: "POST" }).catch(function(){});
+      }
       activeJobId = null;
+      /* Reset gap state unless we're intentionally skipping gap (hasGapData path) */
+      if (!hasGapData) {
+        gapAnalysisReady = false;
+        currentGapData = null;
+        preloadedFitJson = null;
+      }
       detailsLines = buildDetailsLines(file);
       detailsBtn.classList.add("hidden");
       closeDetailsModal();
       errorText.textContent = "";
-      statusBox.style.display = "block";
+      statusBarFile.textContent = file.name;
       setStatus("Uploading", 5, "");
       setPrimaryAction("running");
 
@@ -2225,11 +2261,13 @@
 
     /* ── Batch Tab ── */
     const BATCH_COLS_DEFAULT = [
-      { key: "name", label: "Name" },
-      { key: "match_pct", label: "Match" },
-      { key: "role", label: "Role" },
-      { key: "company", label: "Company" },
-      { key: "date", label: "Date", tooltip: "Last updated" },
+      { key: "name", label: "Name", width: 18 },
+      { key: "match_pct", label: "Match", width: 6 },
+      { key: "role", label: "Role", width: 18 },
+      { key: "company", label: "Company", width: 14 },
+      { key: "source_filename", label: "File", width: 14 },
+      { key: "comments", label: "Comments", editable: true, width: 20 },
+      { key: "date", label: "Date", tooltip: "Last updated", width: 10 },
     ];
     var batchCols = (function() {
       try {
@@ -2268,7 +2306,7 @@
     function batchFilter() {
       var q = batchSearch.value.toLowerCase().trim();
       batchFiltered = q ? batchData.filter(function(m) {
-        return (m.name + " " + m.role + " " + m.company).toLowerCase().indexOf(q) >= 0;
+        return (m.name + " " + m.role + " " + m.company + " " + (m.source_filename || "") + " " + (m.comments || "")).toLowerCase().indexOf(q) >= 0;
       }) : batchData.slice();
       batchSort();
     }
@@ -2289,6 +2327,15 @@
       renderBatchTable();
     }
 
+    // Delegated listener for selectAll — attached once, survives re-renders
+    document.getElementById("batchHead").addEventListener("change", function(e) {
+      if (e.target && e.target.id === "batchSelectAll") {
+        var checked = e.target.checked;
+        batchBody.querySelectorAll("input[type=checkbox]").forEach(function(cb) { cb.checked = checked; });
+        updateBatchBtns();
+      }
+    });
+
     function renderBatchHead() {
       var headRow = document.querySelector("#batchHead tr");
       headRow.innerHTML = "";
@@ -2301,11 +2348,6 @@
       thCb.appendChild(cbInput);
       headRow.appendChild(thCb);
       batchSelectAll = cbInput;
-      batchSelectAll.addEventListener("change", function() {
-        var checked = batchSelectAll.checked;
-        batchBody.querySelectorAll("input[type=checkbox]").forEach(function(cb) { cb.checked = checked; });
-        updateBatchBtns();
-      });
 
       var savedWidths = JSON.parse(localStorage.getItem("batchColPct") || "{}");
       var table = document.getElementById("batchTable");
@@ -2317,7 +2359,7 @@
         if (col.tooltip) th.title = col.tooltip;
         th.draggable = true;
         th.classList.add("draggable-th");
-        if (savedWidths[idx + 1]) th.style.width = savedWidths[idx + 1] + "%";
+        th.style.width = (savedWidths[idx + 1] || col.width || 14) + "%";
 
         // Sort click
         th.addEventListener("click", function(e) {
@@ -2422,7 +2464,15 @@
       batchFiltered.forEach(function(m) {
         var tr = document.createElement("tr");
         var cells = '<td><input type="checkbox" data-id="' + m.id + '" /></td>';
-        batchCols.forEach(function(col) { cells += '<td>' + cellValue(m, col.key) + '</td>'; });
+        batchCols.forEach(function(col) {
+          if (col.editable) {
+            cells += '<td class="editable-cell" data-store-id="' + m.id + '" data-field="' + col.key + '">' + esc(m[col.key] || "") + '</td>';
+          } else if (col.key === "name") {
+            cells += '<td class="name-cell">' + cellValue(m, col.key) + '</td>';
+          } else {
+            cells += '<td>' + cellValue(m, col.key) + '</td>';
+          }
+        });
         tr.innerHTML = cells;
         var cb = tr.querySelector("input");
         cb.addEventListener("click", function(e) {
@@ -2437,9 +2487,7 @@
           batchLastChecked = cb;
           updateBatchBtns();
         });
-        tr.classList.add("clickable");
-        tr.addEventListener("click", function(e) {
-          if (e.target.tagName === "INPUT") return;
+        tr.querySelector(".name-cell").addEventListener("click", function() {
           if (m.tailored || m.analyzed) { openStoredTailorSession(m.id); }
           else { openStoredCv(m.id); }
         });
@@ -2484,6 +2532,42 @@
 
     batchSearch.addEventListener("input", batchFilter);
 
+    /* ── Inline edit for editable cells (Comments) ── */
+    batchBody.addEventListener("dblclick", function(e) {
+      var cell = e.target.closest(".editable-cell");
+      if (!cell || cell.classList.contains("editing")) return;
+      cell.classList.add("editing");
+      var storeId = cell.dataset.storeId;
+      var field = cell.dataset.field;
+      var oldVal = cell.textContent;
+      var input = document.createElement("textarea");
+      input.value = oldVal;
+      input.rows = 2;
+      input.style.cssText = "width:100%;font-size:inherit;font-family:inherit;padding:2px;border:1px solid var(--primary);border-radius:3px;resize:vertical;box-sizing:border-box";
+      cell.textContent = "";
+      cell.appendChild(input);
+      input.focus();
+      function save() {
+        var newVal = input.value.trim();
+        cell.classList.remove("editing");
+        cell.textContent = newVal;
+        if (newVal !== oldVal) {
+          fetch("/store/" + storeId + "/meta", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ field: field, value: newVal })
+          });
+          var item = batchData.find(function(m) { return m.id === storeId; });
+          if (item) item[field] = newVal;
+        }
+      }
+      input.addEventListener("blur", save);
+      input.addEventListener("keydown", function(ev) {
+        if (ev.key === "Escape") { cell.classList.remove("editing"); cell.textContent = oldVal; }
+        if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); save(); }
+      });
+    });
+
     async function batchAction(action, extra) {
       var ids = batchSelected();
       if (!ids.length) return;
@@ -2517,6 +2601,8 @@
       var done = 0, failed = 0, total = jobIds.length, polling = false;
       batchBtns.generate.disabled = true;
       batchBtns.generate.textContent = "0/" + total + "…";
+      setStatus("Batch: 0/" + total, 0, "");
+      statusBarFile.textContent = "Generating…";
       var iv = setInterval(async function() {
         if (polling) return;
         polling = true;
@@ -2537,11 +2623,15 @@
           } catch(e) {}
         }
         polling = false;
+        var pct = Math.round((done + failed) / total * 100);
         batchBtns.generate.textContent = done + "/" + total + "…";
+        setStatus("Batch: " + done + "/" + total, pct, "");
         if (!remaining.size) {
           clearInterval(iv);
           batchBtns.generate.textContent = "Generate";
           updateBatchBtns();
+          setStatus("Ready", 0, "");
+          statusBarFile.textContent = "";
           appLog("Batch complete: " + done + " done" + (failed ? ", " + failed + " failed" : ""));
         }
       }, 1500);
@@ -2587,6 +2677,8 @@
       }
       batchImportBtn.disabled = false;
       batchImportBtn.textContent = "Import CVs";
+      setStatus("Importing: " + jobIds.length + " CV(s)…", 10, "");
+      statusBarFile.textContent = "";
       if (jobIds.length) pollBatchImport(jobIds);
     });
 
@@ -2609,8 +2701,12 @@
           } catch(e) {}
         }
         polling = false;
+        var pct = Math.round((done + failed) / total * 100);
+        setStatus("Import: " + done + "/" + total, pct, "");
         if (!remaining.size) {
           clearInterval(iv);
+          setStatus("Ready", 0, "");
+          statusBarFile.textContent = "";
           appLog("Import complete: " + done + " done" + (failed ? ", " + failed + " failed" : "") + " of " + total);
           loadBatchStore();
         }
@@ -2635,6 +2731,7 @@
         document.querySelector('[data-pane="paneConvert"]').classList.add("active");
         document.getElementById("paneConvert").classList.remove("hidden");
         stopPolling();
+        if (activeJobId) fetch("/jobs/" + activeJobId + "/cancel", { method: "POST" }).catch(function(){});
         activeJobId = null;
         gapAnalysisReady = false;
         hasGapData = false;
@@ -2642,7 +2739,7 @@
         gapPanel.classList.add("hidden");
         setPrimaryAction("idle");
         errorText.textContent = "";
-        statusBox.style.display = "none";
+        statusValue.textContent = "Ready"; progressBar.style.width = "0%";
 
         // Load CV into editor
         cvData = cv;
@@ -2660,6 +2757,7 @@
         dt.items.add(new File([blob], name, { type: "application/json" }));
         fileInput.files = dt.files;
 
+        statusBarFile.textContent = data._meta && data._meta.name || "";
         appLog("Loaded CV from store: " + (data._meta && data._meta.name || storeId.substring(0, 8)));
       } catch (e) {
         alert("Error: " + e.message);
@@ -2692,12 +2790,14 @@
         document.querySelector('[data-pane="paneConvert"]').classList.add("active");
         document.getElementById("paneConvert").classList.remove("hidden");
         stopPolling();
+        if (activeJobId) fetch("/jobs/" + activeJobId + "/cancel", { method: "POST" }).catch(function(){});
         activeJobId = null;
         gapAnalysisReady = false;
         hasGapData = false;
         currentGapData = null;
         errorText.textContent = "";
-        statusBox.style.display = "none";
+        statusValue.textContent = "Ready"; progressBar.style.width = "0%";
+        statusBarFile.textContent = data._meta && data._meta.name || "";
         setPrimaryAction("idle");
 
         // Enable tailor mode and fill JD
@@ -2777,6 +2877,54 @@
           document.removeEventListener("mousemove", onMove);
           document.removeEventListener("mouseup", onUp);
           localStorage.setItem("pageMaxWidth", parseInt(page.style.maxWidth));
+        }
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+      });
+      var handleL = document.getElementById("resizeHandleL");
+      handleL.addEventListener("mousedown", function(e) {
+        e.preventDefault();
+        handleL.classList.add("active");
+        page.style.transition = "none";
+        var startX = e.clientX;
+        var startW = page.offsetWidth;
+        function onMove(e2) {
+          var delta = (startX - e2.clientX) * 2;
+          var newW = Math.max(500, Math.min(window.innerWidth - 40, startW + delta));
+          page.style.maxWidth = newW + "px";
+        }
+        function onUp() {
+          handleL.classList.remove("active");
+          document.removeEventListener("mousemove", onMove);
+          document.removeEventListener("mouseup", onUp);
+          localStorage.setItem("pageMaxWidth", parseInt(page.style.maxWidth));
+        }
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+      });
+    })();
+
+    /* ── Vertical resize ── */
+    (function() {
+      var handleV = document.getElementById("resizeHandleV");
+      var mainCard = document.querySelector(".main-card");
+      var savedH = localStorage.getItem("pageHeight");
+      if (savedH) mainCard.style.setProperty("--pane-height", savedH + "px");
+      handleV.addEventListener("mousedown", function(e) {
+        e.preventDefault();
+        handleV.classList.add("active");
+        var startY = e.clientY;
+        var startH = mainCard.offsetHeight;
+        function onMove(e2) {
+          var newH = Math.max(300, startH + e2.clientY - startY);
+          mainCard.style.setProperty("--pane-height", newH + "px");
+        }
+        function onUp() {
+          handleV.classList.remove("active");
+          document.removeEventListener("mousemove", onMove);
+          document.removeEventListener("mouseup", onUp);
+          var cur = mainCard.style.getPropertyValue("--pane-height");
+          localStorage.setItem("pageHeight", parseInt(cur));
         }
         document.addEventListener("mousemove", onMove);
         document.addEventListener("mouseup", onUp);

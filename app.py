@@ -35,6 +35,15 @@ app.mount("/images", StaticFiles(directory=APP_DIR / "images"), name="images")
 jobs = InMemoryJobStore()
 _SERVER_START = time.time()
 _JOB_SEMAPHORE = threading.Semaphore(5)  # max 5 concurrent LLM jobs
+_STORE_LOCK = threading.Lock()  # serialize store file writes
+
+import re
+_STORE_ID_RE = re.compile(r'^[a-fA-F0-9]+$')
+
+def _validate_store_id(store_id: str) -> None:
+    """Reject path traversal and invalid store IDs."""
+    if not store_id or not _STORE_ID_RE.match(store_id):
+        raise HTTPException(status_code=400, detail="Invalid store ID")
 
 # Background cleanup: remove finished jobs and their tmp dirs every 10 minutes
 _JOB_MAX_AGE_SEC = 3600  # 1 hour
@@ -264,6 +273,7 @@ def list_store():
 @app.get("/store/{store_id}")
 def get_store_item(store_id: str):
     """Return full stored CV including tailor session if present."""
+    _validate_store_id(store_id)
     p = STORE_DIR / f"{store_id}.json"
     if not p.exists():
         raise HTTPException(status_code=404, detail="Not found")
@@ -273,10 +283,31 @@ def get_store_item(store_id: str):
 
 @app.delete("/store/{store_id}")
 def delete_store_item(store_id: str):
+    _validate_store_id(store_id)
     p = STORE_DIR / f"{store_id}.json"
     if not p.exists():
         raise HTTPException(status_code=404, detail="Not found")
     p.unlink()
+    return {"ok": True}
+
+
+_EDITABLE_META_FIELDS = {"comments"}
+
+@app.patch("/store/{store_id}/meta")
+async def update_store_meta(store_id: str, request: Request):
+    _validate_store_id(store_id)
+    body = await request.json()
+    field = body.get("field", "")
+    value = body.get("value", "")
+    if field not in _EDITABLE_META_FIELDS:
+        raise HTTPException(status_code=400, detail=f"Field not editable: {field}")
+    with _STORE_LOCK:
+        p = STORE_DIR / f"{store_id}.json"
+        if not p.exists():
+            raise HTTPException(status_code=404, detail="Not found")
+        data = json.loads(p.read_text(encoding="utf-8"))
+        data["_meta"][field] = value
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"ok": True}
 
 
@@ -291,6 +322,9 @@ async def batch_store_action(request: Request):
 
     if not ids:
         raise HTTPException(status_code=400, detail="No IDs provided")
+
+    for sid in ids:
+        _validate_store_id(sid)
 
     if action == "delete":
         deleted = 0
@@ -355,9 +389,9 @@ def setup_page():
     elif cfg.get("gemini_api_key") or cfg.get("api_key"):
         key_source = "<code>~/.quantoricv_settings.json</code>"
 
-    key_display = f"{current_key[:8]}...{current_key[-4:]}" if len(current_key) > 12 else ("(not set)" if not current_key else current_key)
+    key_display = "[configured]" if current_key else "(not set)"
     status_color = "#2e7d32" if current_key else "#c62828"
-    status_text = f"Key configured: {key_display} — source: {key_source}" if current_key else "⚠️ No API key configured"
+    status_text = f"Key {key_display} — source: {key_source}" if current_key else "⚠️ No API key configured"
 
     html = f"""<!doctype html>
 <html lang="en">
@@ -506,71 +540,78 @@ def _find_store_by_name(name: str) -> Path | None:
 
 def _save_to_store(store_id: str, cv_json: dict, source_filename: str) -> None:
     """Persist extracted CV JSON with metadata to _store/."""
-    basics = cv_json.get("basics", {})
-    # Dedup by name: if same person already in store, skip
-    existing = _find_store_by_name(basics.get("name", ""))
-    if existing and existing.stem != store_id:
-        return
-    exp = cv_json.get("experience", [])
-    meta = {
-        "id": store_id,
-        "name": basics.get("name", ""),
-        "role": basics.get("current_title", ""),
-        "company": exp[0].get("company_name", "") if exp else "",
-        "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "source_filename": source_filename,
-    }
-    data = {"_meta": meta, **{k: v for k, v in cv_json.items() if k != "_meta"}}
-    (STORE_DIR / f"{store_id}.json").write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    with _STORE_LOCK:
+        basics = cv_json.get("basics", {})
+        existing = _find_store_by_name(basics.get("name", ""))
+        if existing and existing.stem != store_id:
+            return
+        exp = cv_json.get("experience", [])
+        # Auto-detect source (like desktop Q-CV)
+        fname_lower = (source_filename or "").lower()
+        links_dump = json.dumps(basics.get("links", [])).lower()
+        if "linkedin.com" in links_dump or "linkedin" in fname_lower or fname_lower.startswith("profile"):
+            comments = "Source: LinkedIn"
+        else:
+            comments = ""
+
+        meta = {
+            "id": store_id,
+            "name": basics.get("name", ""),
+            "role": basics.get("current_title", ""),
+            "company": exp[0].get("company_name", "") if exp else "",
+            "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "source_filename": source_filename,
+            "comments": comments,
+        }
+        data = {"_meta": meta, **{k: v for k, v in cv_json.items() if k != "_meta"}}
+        (STORE_DIR / f"{store_id}.json").write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
 
 def _save_store_gap(store_id: str, gap_analysis: dict, jd_text: str, base_json: dict = None) -> None:
     """Save gap analysis to store entry — sets 'analyzed' badge."""
-    pct = gap_analysis.get("match_percentage", 0)
-    p = STORE_DIR / f"{store_id}.json"
-    if not p.exists():
-        name = (base_json or {}).get("basics", {}).get("name", "")
-        p = _find_store_by_name(name)
-        if not p:
-            print(f"[_save_store_gap] NOT FOUND: sid={store_id[:12]}, name={name!r}, pct={pct}")
-            return
-        print(f"[_save_store_gap] fallback by name: {name!r} → {p.stem[:12]}, pct={pct}")
-    else:
-        print(f"[_save_store_gap] direct: sid={store_id[:12]}, pct={pct}")
-    data = json.loads(p.read_text(encoding="utf-8"))
-    data["_gap_session"] = {
-        "gap_analysis": gap_analysis,
-        "jd_text": jd_text,
-        "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
-    }
-    data["_meta"]["analyzed"] = True
-    data["_meta"]["match_pct"] = int(gap_analysis.get("match_percentage", 0))
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    with _STORE_LOCK:
+        p = STORE_DIR / f"{store_id}.json"
+        if not p.exists():
+            name = (base_json or {}).get("basics", {}).get("name", "")
+            p = _find_store_by_name(name)
+            if not p:
+                return
+        data = json.loads(p.read_text(encoding="utf-8"))
+        data["_gap_session"] = {
+            "gap_analysis": gap_analysis,
+            "jd_text": jd_text,
+            "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        data["_meta"]["analyzed"] = True
+        data["_meta"]["match_pct"] = int(gap_analysis.get("match_percentage", 0))
+        data["_meta"]["date"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _update_store_tailor(store_id: str, tailored_json: dict, jd_text: str,
                          gap_analysis: dict, focus_skills: list,
                          keyword_report: dict) -> None:
     """Update an existing store entry with tailoring session data."""
-    p = STORE_DIR / f"{store_id}.json"
-    if not p.exists():
-        # Try to find by candidate name (covers JSON upload where sid differs)
-        name = tailored_json.get("basics", {}).get("name", "")
-        p = _find_store_by_name(name)
-        if not p:
-            return
-    data = json.loads(p.read_text(encoding="utf-8"))
-    data["_tailor_session"] = {
-        "tailored_json": tailored_json,
-        "jd_text": jd_text,
-        "gap_analysis": gap_analysis,
-        "focus_skills": focus_skills,
-        "keyword_report": keyword_report,
-        "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
-    }
+    with _STORE_LOCK:
+        p = STORE_DIR / f"{store_id}.json"
+        if not p.exists():
+            name = tailored_json.get("basics", {}).get("name", "")
+            p = _find_store_by_name(name)
+            if not p:
+                return
+        data = json.loads(p.read_text(encoding="utf-8"))
+        data["_tailor_session"] = {
+            "tailored_json": tailored_json,
+            "jd_text": jd_text,
+            "gap_analysis": gap_analysis,
+            "focus_skills": focus_skills,
+            "keyword_report": keyword_report,
+            "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
     data["_meta"]["tailored"] = True
+    data["_meta"]["date"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     # Keep gap analysis match_percentage (consistent with Fit Report on Convert tab)
     if gap_analysis and gap_analysis.get("match_percentage"):
         data["_meta"]["match_pct"] = int(gap_analysis["match_percentage"])
@@ -635,12 +676,13 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
                                 _save_to_store(sid, base_json, source_path.name)
                             # Save gap analysis immediately (shows "Analyzed" badge)
                             _save_store_gap(sid, gap_result, jd_text, base_json)
-                        except Exception as exc:
-                            print(f"[gap_ready_cb] store save error: {exc}")
-                            import traceback; traceback.print_exc()
+                        except Exception:
+                            pass
 
             def focus_skills_cb() -> list:
                 job = jobs.get(job_id)
+                if job and getattr(job, "_cancelled", False):
+                    raise RuntimeError("Job cancelled by user")
                 return getattr(job, "_focus_skills", []) if job else []
 
         # skip_gap: pre-fill focus_skills and gap_analysis, no pause
@@ -648,11 +690,12 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             _preloaded_fs = preloaded_focus_skills or []
             def focus_skills_cb() -> list:
                 return _preloaded_fs
-            # Preserve gap_analysis from preloaded data so store save can use it
-            if preloaded_gap:
-                job = jobs.get(job_id)
-                if job:
+            # Preserve gap_analysis and focus_skills on job for store save
+            job = jobs.get(job_id)
+            if job:
+                if preloaded_gap:
                     setattr(job, "_gap_analysis", preloaded_gap)
+                setattr(job, "_focus_skills", _preloaded_fs)
 
         job_engine = QCVWebEngine(TEMPLATES_DIR)
         result_path = job_engine.process(
@@ -701,6 +744,7 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
 
         # Auto-save base CV JSON to persistent store
         try:
+            job = jobs.get(job_id)
             if base_json:
                 sid = source_key or hashlib.sha256(
                     json.dumps(base_json, sort_keys=True).encode()
@@ -716,8 +760,8 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
                     kw_report = cd.get("jd_keyword_report", {})
                     if tailored:
                         _update_store_tailor(sid, tailored, jd_text, gap or {}, focus, kw_report)
-        except Exception as exc:
-            import traceback; traceback.print_exc()  # debug store save
+        except Exception:
+            pass
 
         append_usage({
             "event": "done",
@@ -1084,3 +1128,21 @@ async def continue_job(job_id: str, request: Request):
         setattr(job, "_focus_skills", focus_skills)
     pause_event.set()
     return {"job_id": job_id, "status": "Resuming"}
+
+
+@app.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    """Cancel a pending job — unblocks pause_event so the thread can exit."""
+    job = jobs.get(job_id)
+    if not job:
+        return {"ok": True}  # already gone
+    # Set cancelled flag so gap analysis raises after unblock
+    setattr(job, "_cancelled", True)
+    # Unblock pause_event if waiting
+    pause_event = getattr(job, "_pause_event", None)
+    if pause_event:
+        pause_event.set()
+    # Mark as failed
+    if job.status not in ("Done", "Failed"):
+        jobs.update(job_id, status="Failed", progress=100, error="Cancelled by user")
+    return {"ok": True}

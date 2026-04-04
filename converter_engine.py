@@ -975,8 +975,8 @@ class QCVWebEngine:
                     gap_ready_cb(gap_result, copy.deepcopy(data))
                 if pause_event is not None:
                     self._status(status_cb, "gap_analysis_ready", 55)
-                    if not pause_event.wait(timeout=600):
-                        raise RuntimeError("Gap analysis timed out — user did not proceed within 10 minutes.")
+                    if not pause_event.wait(timeout=180):
+                        raise RuntimeError("Gap analysis timed out — user did not proceed within 3 minutes.")
             except (RuntimeError,) as gap_err:
                 if "timed out" in str(gap_err):
                     raise
