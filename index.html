@@ -2353,7 +2353,7 @@
       headRow.innerHTML = "";
       // Checkbox column (not draggable)
       var thCb = document.createElement("th");
-      thCb.style.width = "30px";
+      thCb.style.cssText = "width:30px;max-width:30px;min-width:30px;padding:5px 4px";
       var cbInput = document.createElement("input");
       cbInput.type = "checkbox";
       cbInput.id = "batchSelectAll";
@@ -2372,6 +2372,11 @@
         if (savedWidths[col.key]) { savedTotal += savedWidths[col.key]; hasSaved = true; }
       });
       var useSaved = hasSaved && savedTotal <= containerW;
+      // Normalize default percentages so visible cols fill 100%
+      var pctTotal = 0;
+      if (!useSaved) {
+        visCols.forEach(function(col) { pctTotal += (col.width || 14); });
+      }
 
       visCols.forEach(function(col, idx) {
         var th = document.createElement("th");
@@ -2383,7 +2388,8 @@
         if (useSaved && savedWidths[col.key]) {
           th.style.width = savedWidths[col.key] + "px";
         } else {
-          th.style.width = (col.width || 14) + "%";
+          var normalizedPct = (col.width || 14) / pctTotal * 100;
+          th.style.width = normalizedPct + "%";
         }
 
         // Sort click
@@ -2531,7 +2537,7 @@
         : batchFiltered.length + " / " + batchData.length + " CVs";
       batchFiltered.forEach(function(m) {
         var tr = document.createElement("tr");
-        var cells = '<td><input type="checkbox" data-id="' + m.id + '" /></td>';
+        var cells = '<td style="width:30px;max-width:30px;padding:5px 4px"><input type="checkbox" data-id="' + m.id + '" /></td>';
         getVisibleCols().forEach(function(col) {
           if (col.editable) {
             cells += '<td class="editable-cell" data-store-id="' + m.id + '" data-field="' + col.key + '">' + esc(m[col.key] || "") + '</td>';
@@ -2615,6 +2621,7 @@
         cb.addEventListener("change", function() {
           batchColVisible[col.key] = cb.checked;
           localStorage.setItem("batchColVisible", JSON.stringify(batchColVisible));
+          localStorage.removeItem("batchColPx");
           renderBatchHead();
           renderBatchTable();
         });
