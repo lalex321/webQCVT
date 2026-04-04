@@ -835,6 +835,11 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
                 sid = source_key or hashlib.sha256(
                     json.dumps(base_json, sort_keys=True).encode()
                 ).hexdigest()
+                # Save to store (dedup by hash and name)
+                name = base_json.get("basics", {}).get("name", "")
+                existing_by_name = _find_store_by_name(name)
+                if existing_by_name:
+                    sid = existing_by_name.stem  # reuse existing store ID
                 if not (STORE_DIR / f"{sid}.json").exists():
                     _save_to_store(sid, base_json, source_path.name)
                 # Save tailoring session if tailor was performed
