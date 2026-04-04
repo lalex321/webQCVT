@@ -1577,7 +1577,7 @@
           '<button class="cv-ed-btn danger" data-action="del-cat" data-cat="' + escHtml(cat) + '" type="button" style="font-size:11px">- Category</button></div>' +
           '<div>';
         items.forEach(function(sk, si) {
-          h += '<span class="cv-ed-tag"><span class="cv-ed-cell" contenteditable data-path="skills.' + escHtml(cat) + '.' + si + '">' + escHtml(sk) + '</span>' +
+          h += '<span class="cv-ed-tag"><span class="cv-ed-cell" contenteditable data-path="skill-item" data-cat="' + escHtml(cat) + '" data-idx="' + si + '">' + escHtml(sk) + '</span>' +
             ' <span class="tag-x" data-action="del-skill" data-cat="' + escHtml(cat) + '" data-si="' + si + '">&times;</span></span>';
         });
         h += ' <button class="cv-ed-btn" data-action="add-skill" data-cat="' + escHtml(cat) + '" type="button" style="font-size:11px">+</button>' +
@@ -1661,7 +1661,16 @@
       if (!cell) return;
       const path = cell.dataset.path;
       const val = cell.textContent.trim();
-      setNestedValue(cvData, path, val);
+      if (path === "skill-item") {
+        // Handle skill items via data-cat/data-idx to avoid dot-splitting issues
+        const cat = cell.dataset.cat;
+        const idx = parseInt(cell.dataset.idx);
+        if (cvData.skills && cvData.skills[cat]) {
+          cvData.skills[cat][idx] = val;
+        }
+      } else if (path !== "skills-cat") {
+        setNestedValue(cvData, path, val);
+      }
       markCvDirty();
     });
 
@@ -2529,6 +2538,7 @@
     }
 
     function renderBatchTable() {
+      batchLastChecked = null;
       batchBody.innerHTML = "";
       batchEmpty.style.display = batchFiltered.length ? "none" : "";
       document.getElementById("batchTable").style.display = batchFiltered.length ? "" : "none";
@@ -3047,7 +3057,7 @@
         errorText.textContent = err.message || "Initialization failed.";
       }
       setPrimaryAction("idle");
-      setStatus("Queued", 0, "");
+      setStatus("Ready", 0, "");
 
     })();
   </script>

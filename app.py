@@ -377,7 +377,8 @@ async def batch_store_action(request: Request):
     if not template_name:
         tpls = sorted(TEMPLATES_DIR.glob("*.docx"))
         template_name = tpls[0].name if tpls else ""
-    if not (TEMPLATES_DIR / template_name).exists():
+    tpl_path = (TEMPLATES_DIR / template_name).resolve()
+    if not str(tpl_path).startswith(str(TEMPLATES_DIR.resolve())) or not tpl_path.exists():
         raise HTTPException(status_code=400, detail=f"Unknown template: {template_name}")
 
     client_ip = request.client.host if request.client else "unknown"
@@ -580,7 +581,7 @@ def _store_cache_init():
     _store_cache_ready = True
 
 def _store_cache_upsert(meta: dict):
-    """Add or update a meta entry in the cache."""
+    """Add or update a meta entry in the cache. Must be called with _STORE_LOCK held."""
     sid = meta.get("id", "")
     for i, m in enumerate(_store_cache):
         if m.get("id") == sid:
@@ -589,26 +590,39 @@ def _store_cache_upsert(meta: dict):
     _store_cache.append(meta)
 
 def _store_cache_remove(store_id: str):
-    """Remove an entry from the cache."""
-    global _store_cache
-    _store_cache = [m for m in _store_cache if m.get("id") != store_id]
+    """Remove an entry from the cache. Thread-safe."""
+    with _STORE_LOCK:
+        global _store_cache
+        _store_cache = [m for m in _store_cache if m.get("id") != store_id]
 
 def _store_cache_get_meta(store_id: str) -> dict | None:
-    """Get cached meta by ID."""
-    for m in _store_cache:
-        if m.get("id") == store_id:
-            return m
+    """Get cached meta by ID. Thread-safe."""
+    with _STORE_LOCK:
+        for m in _store_cache:
+            if m.get("id") == store_id:
+                return dict(m)
     return None
 
 
 def _find_store_by_name(name: str) -> Path | None:
-    """Check if a CV with this name already exists in store."""
+    """Check if a CV with this name already exists in store (uses cache)."""
     if not name:
         return None
+    name_lower = name.lower()
+    # Try cache first (fast path)
+    if _store_cache_ready:
+        with _STORE_LOCK:
+            for m in _store_cache:
+                if m.get("name", "").lower() == name_lower:
+                    p = STORE_DIR / f"{m['id']}.json"
+                    if p.exists():
+                        return p
+        return None
+    # Fallback: read files (only during startup before cache is ready)
     for p in STORE_DIR.glob("*.json"):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-            if data.get("_meta", {}).get("name", "").lower() == name.lower():
+            if data.get("_meta", {}).get("name", "").lower() == name_lower:
                 return p
         except Exception:
             continue
@@ -716,7 +730,8 @@ def _list_store() -> list[dict]:
     """Return list of _meta dicts for all stored CVs (from cache)."""
     if not _store_cache_ready:
         _store_cache_init()
-    return sorted(_store_cache, key=lambda m: m.get("date", ""), reverse=True)
+    with _STORE_LOCK:
+        return sorted(list(_store_cache), key=lambda m: m.get("date", ""), reverse=True)
 
 
 def _load_store_cv(store_id: str) -> dict | None:
@@ -839,6 +854,11 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
                 setattr(job, "_output_dir", str(workdir))
                 setattr(job, "_source_name", source_path.name)
 
+        # Check if job was cancelled while running
+        job = jobs.get(job_id)
+        if job and getattr(job, "_cancelled", False):
+            jobs.update(job_id, status="Cancelled", progress=100)
+            return
         jobs.update(job_id, status="Done", progress=100, result_path=str(result_path))
 
         # Auto-save base CV JSON to persistent store
@@ -926,8 +946,8 @@ async def create_job(
     if not template_name:
         raise HTTPException(status_code=400, detail="Template is required.")
 
-    template_path = TEMPLATES_DIR / template_name
-    if not template_path.exists():
+    template_path = (TEMPLATES_DIR / template_name).resolve()
+    if not str(template_path).startswith(str(TEMPLATES_DIR.resolve())) or not template_path.exists():
         raise HTTPException(status_code=400, detail=f"Unknown template: {template_name}")
 
     # Read uploaded file
@@ -1094,17 +1114,25 @@ async def reanalyze_job(job_id: str, request: Request):
     if not jd_text.strip():
         raise HTTPException(status_code=400, detail="Job description is required")
 
-    engine = QCVWebEngine(TEMPLATES_DIR)
-    engine.config = _core.load_config()
-    engine.model_name = choose_model_name(engine.config)
-    api_key = resolve_api_key(engine.app_dir, engine.config)
-    configure_gemini(api_key)
+    import asyncio
 
-    gap_result = engine._analyze_gap(cv_json, jd_text)
-    gap_result["_output_base"] = _build_output_base_name(cv_json, anonymize=False)
+    def _do_reanalyze():
+        _JOB_SEMAPHORE.acquire()
+        try:
+            engine = QCVWebEngine(TEMPLATES_DIR)
+            engine.config = _core.load_config()
+            engine.model_name = choose_model_name(engine.config)
+            api_key = resolve_api_key(engine.app_dir, engine.config)
+            configure_gemini(api_key)
+            gap_result = engine._analyze_gap(cv_json, jd_text)
+            gap_result["_output_base"] = _build_output_base_name(cv_json, anonymize=False)
+            setattr(job, "_gap_analysis", gap_result)
+            return gap_result
+        finally:
+            _JOB_SEMAPHORE.release()
 
-    setattr(job, "_gap_analysis", gap_result)
-    return gap_result
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _do_reanalyze)
 
 
 @app.get("/jobs/{job_id}/download")
@@ -1129,6 +1157,7 @@ def download_job_result(job_id: str):
 def _run_refine(job_id: str, tailored_json: dict, jd_text: str, missing_keywords: list[str],
                 output_dir: str, anonymize: bool, template_name: str, source_name: str,
                 client_ip: str, started_at: float) -> None:
+    _JOB_SEMAPHORE.acquire()
     try:
         def cb(status: str, progress: int) -> None:
             jobs.update(job_id, status=status, progress=progress)
@@ -1167,6 +1196,8 @@ def _run_refine(job_id: str, tailored_json: dict, jd_text: str, missing_keywords
         jobs.update(job_id, status="Done", progress=100, result_path=str(result_path))
     except Exception as e:
         jobs.update(job_id, status="Failed", progress=100, error=str(e))
+    finally:
+        _JOB_SEMAPHORE.release()
 
 
 @app.post("/jobs/{job_id}/refine")
