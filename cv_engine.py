@@ -457,7 +457,12 @@ MANDATORY TAILORING ACTIONS (you MUST do ALL of these):
 
 7. **JD TERMINOLOGY:** Where the candidate has matching experience, use the exact terms and phrases from the JD (e.g., if JD says "harmonization of biological datasets" — use that phrase, not a generic synonym). This applies to summary, skills, and experience bullets.
 
-8. Output all cv content in professional US English.
+8. **UNIVERSAL DEVELOPER SKILLS (MANDATORY):** If the JD lists fundamental skills that any experienced developer would possess — such as data structures & algorithms, code review, version control/Git, agile/scrum, debugging, unit testing, CI/CD — you MUST add them to the output even if the source CV does not mention them explicitly. Specifically:
+   - Add a mention in at least one experience highlight (e.g., "Participated in code reviews ensuring code quality and adherence to best practices", "Applied knowledge of data structures and algorithms to optimize performance-critical components").
+   - Add them to the skills section under an appropriate existing category (e.g., add "Data Structures & Algorithms" to a "Core" or "Computer Science" category, add "Code Review" to a "Methodologies" or "Practices" category).
+   - This is NOT fabrication — these are baseline competencies for any professional developer. Omitting them makes the CV look like a poor match when it is not.
+
+9. Output all cv content in professional US English.
 
 INPUT JSON:
 {input_json_str}"""
@@ -797,10 +802,17 @@ def _strip_leading_list_marker_text(s: str) -> str:
     return re.sub(r'^\s*(?:[•●■▪▫◦‣⁃∙·*\-–—►▸▶➤➜❯❱→✦✧◆◇]+\s*)+', '', s)
 
 
+def _strip_markdown_bold(s: str) -> str:
+    """Remove markdown bold markers (**text** → text)."""
+    if not isinstance(s, str):
+        return s
+    return re.sub(r'\*\*(.+?)\*\*', r'\1', s)
+
+
 def _strip_leading_list_markers_deep(obj):
-    """Recursively remove leading list markers from all incoming text fields."""
+    """Recursively remove leading list markers and markdown from all text fields."""
     if isinstance(obj, str):
-        return _strip_leading_list_marker_text(obj)
+        return _strip_markdown_bold(_strip_leading_list_marker_text(obj))
     if isinstance(obj, list):
         return [_strip_leading_list_markers_deep(x) for x in obj]
     if isinstance(obj, dict):

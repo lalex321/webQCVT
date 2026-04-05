@@ -1134,18 +1134,21 @@
         const sb = (b.status || "").toLowerCase().replace(/\s+/g, "");
         return (statusOrder[sa] ?? 3) - (statusOrder[sb] ?? 3);
       });
-      const savedChecked = savedEdits ? new Set(savedEdits.checked_skills || []) : null;
+      const savedList = savedEdits && savedEdits.checked_skills && savedEdits.checked_skills.length > 0
+        ? savedEdits.checked_skills : null;
+      const savedChecked = savedList ? new Set(savedList) : null;
       sortedSkills.forEach(function(row) {
         const tr = document.createElement("tr");
         const status = (row.status || "").toLowerCase().replace(/\s+/g, "");
         const isGap = status === "partial" || status === "missing";
         const reqName = row.requirement || "";
-        /* Determine checked state: from saved edits or default */
+        /* Determine checked state: from saved edits, or default (partial + universal missing = checked) */
+        const universalSkills = /data structures|algorithms|code review|version control|git\b|agile|scrum|debugging|unit test|testing/i;
         let checked = false;
         if (savedChecked) {
           checked = savedChecked.has(reqName);
         } else {
-          checked = status === "partial";
+          checked = status === "partial" || (status === "missing" && universalSkills.test(reqName));
         }
         const isChecked = checked ? " checked" : "";
         const cbHtml = isGap
@@ -2086,9 +2089,7 @@
         hasGapData = false;
         gapAnalysisReady = false;
         preloadedFitJson = null;
-        generateBtn.disabled = false;
-        generateBtn.classList.remove("hidden");
-        updateBtnLabel();
+        setPrimaryAction("idle");
       }
     });
     warnJsonInput.addEventListener("change", () => { savePrefs(); });
