@@ -371,20 +371,47 @@ async def batch_store_action(request: Request):
     if action == "analyze":
         if not jd_text.strip():
             raise HTTPException(status_code=400, detail="JD text is required for analysis")
-        created_jobs = []
+        # Filter out already analyzed with same JD
+        todo_ids = []
+        skipped = 0
+        jd_stripped = jd_text.strip()
         for sid in ids:
-            cv_json = _load_store_cv(sid)
-            if not cv_json:
-                continue
+            p = STORE_DIR / f"{sid}.json"
+            if p.exists():
+                try:
+                    store_data = json.loads(p.read_text(encoding="utf-8"))
+                    prev_jd = (store_data.get("_gap_session") or {}).get("jd_text", "").strip()
+                    if prev_jd == jd_stripped:
+                        skipped += 1
+                        continue
+                except Exception:
+                    pass
+            todo_ids.append(sid)
+
+        # Create jobs upfront (for frontend polling) but run sequentially
+        created_jobs = []
+        for sid in todo_ids:
             job = jobs.create(f"analyze_{sid[:8]}", anonymize=False, autofix=False, template_name="")
-            thread = threading.Thread(
-                target=_run_batch_analyze,
-                args=(job.job_id, sid, cv_json, jd_text),
-                daemon=True,
-            )
-            thread.start()
             created_jobs.append({"store_id": sid, "job_id": job.job_id})
-        return {"ok": True, "jobs": created_jobs}
+
+        # Single orchestrator thread runs jobs one by one
+        if created_jobs:
+            def _batch_analyze_orchestrator():
+                for item in created_jobs:
+                    sid, jid = item["store_id"], item["job_id"]
+                    job = jobs.get(jid)
+                    if job and getattr(job, "_cancelled", False):
+                        jobs.update(jid, status="Cancelled", progress=100)
+                        continue
+                    cv_json = _load_store_cv(sid)
+                    if not cv_json:
+                        jobs.update(jid, status="Failed", progress=100, error="CV not found")
+                        continue
+                    _run_batch_analyze(jid, sid, cv_json, jd_text)
+            thread = threading.Thread(target=_batch_analyze_orchestrator, daemon=True)
+            thread.start()
+
+        return {"ok": True, "jobs": created_jobs, "skipped": skipped}
 
     if action not in ("generate", "anonymize", "tailor"):
         raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
@@ -707,6 +734,8 @@ def _save_store_gap(store_id: str, gap_analysis: dict, jd_text: str, base_json: 
             "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
         data["_meta"]["analyzed"] = True
+        data["_meta"]["tailored"] = False  # new analysis invalidates old tailoring
+        data.pop("_tailor_session", None)  # remove stale tailor data
         data["_meta"]["match_pct"] = int(gap_analysis.get("match_percentage", 0))
         data["_meta"]["date"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         data["_meta"]["id"] = p.stem
@@ -764,8 +793,19 @@ def _load_store_cv(store_id: str) -> dict | None:
 
 def _run_batch_analyze(job_id: str, store_id: str, cv_json: dict, jd_text: str) -> None:
     """Lightweight batch analysis: gap analysis only, no DOCX generation."""
-    _JOB_SEMAPHORE.acquire()
+    # Wait for semaphore, checking cancel every second
+    while not _JOB_SEMAPHORE.acquire(timeout=1):
+        job = jobs.get(job_id)
+        if job and getattr(job, "_cancelled", False):
+            jobs.update(job_id, status="Cancelled", progress=100)
+            return
     try:
+        # Check if cancelled after acquiring semaphore
+        job = jobs.get(job_id)
+        if job and getattr(job, "_cancelled", False):
+            jobs.update(job_id, status="Cancelled", progress=100)
+            return
+
         jobs.update(job_id, status="Analyzing", progress=30)
         engine = QCVWebEngine(TEMPLATES_DIR)
         engine.config = _core.load_config()
@@ -1018,9 +1058,11 @@ async def create_job(
         # If _fit_session contains JD and user didn't provide one, use it
         if fit_session and not jd_text.strip():
             jd_text = fit_session.get("jd_text", "")
-        # Auto-enable tailor if fit_session has JD
-        if fit_session and fit_session.get("jd_text", "").strip():
-            tailor = True
+        # Auto-enable tailor if fit_session has JD — but only if user didn't explicitly disable it
+        if fit_session and fit_session.get("jd_text", "").strip() and tailor:
+            pass  # keep tailor=True (user has checkbox on)
+        elif not tailor:
+            fit_session = None  # user unchecked tailor — ignore fit_session
         # Extract focus_skills from fit_session (only when frontend requested skip_gap)
         if fit_session and skip_gap:
             user_edits = fit_session.get("user_edits", {})

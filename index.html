@@ -157,6 +157,7 @@
     .badge-tailored:hover{background:#c7d2fe}
     .badge-analyzed{display:inline-block;font-size:9px;font-weight:700;background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px;margin-left:6px;vertical-align:middle;cursor:pointer}
     .badge-analyzed:hover{background:#fde68a}
+    .batch-table tr.batch-active{background:rgba(250,204,21,.12)}
     .batch-table tr.clickable{cursor:pointer}
     .batch-table tr.clickable:hover{background:rgba(99,102,241,.08)}
     .shell{
@@ -724,6 +725,7 @@
       <span id="errorText" class="statusbar-error"></span>
       <span id="statusBarFile" class="statusbar-file"></span>
       <button id="detailsBtn" class="statusbar-details hidden" type="button">Details</button>
+      <button id="batchStopBtn" class="statusbar-details hidden" type="button" style="color:#dc2626">Stop</button>
     </div>
     </div><!-- /main-card -->
   </div>
@@ -2218,7 +2220,7 @@
         btn.classList.add("active");
         document.getElementById(btn.dataset.pane).classList.remove("hidden");
         if (btn.dataset.pane === "panePrompt" && !promptDataLoaded) loadPrompts();
-        if (btn.dataset.pane === "paneBatch") loadBatchStore();
+        if (btn.dataset.pane === "paneBatch" && !batchPollInterval) loadBatchStore();
       });
     });
 
@@ -2542,17 +2544,25 @@
     renderBatchHead();
 
     function cellValue(m, key) {
-      if (key === "match_pct") return m.match_pct ? m.match_pct + "%" : "";
+      if (key === "match_pct") {
+        if (m.match_pct == null || m.match_pct === "") return "";
+        var pct = m.match_pct;
+        var color = pct >= 70 ? "#16a34a" : pct >= 40 ? "#d97706" : "#dc2626";
+        return '<span style="color:' + color + ';font-weight:700">' + pct + '%</span>';
+      }
       if (key === "date") return m.date ? m.date.substring(0, 10) : "";
       if (key === "name") {
-        var badge = m.tailored ? '<span class="badge-tailored">Tailored</span>'
-          : m.analyzed ? '<span class="badge-analyzed">Analyzed</span>' : '';
-        return esc(m.name) + badge;
+        return esc(m.name);
       }
       return esc(m[key] || "");
     }
 
     function renderBatchTable() {
+      // Preserve checked state across re-render
+      var checkedIds = new Set();
+      batchBody.querySelectorAll("input[type=checkbox]:checked").forEach(function(cb) {
+        if (cb.dataset.id) checkedIds.add(cb.dataset.id);
+      });
       batchLastChecked = null;
       batchBody.innerHTML = "";
       batchEmpty.style.display = batchFiltered.length ? "none" : "";
@@ -2588,10 +2598,14 @@
           updateBatchBtns();
         });
         tr.querySelector(".name-cell").addEventListener("click", function() {
-          if (m.tailored || m.analyzed) { openStoredTailorSession(m.id); }
+          if (m.match_pct || m.tailored || m.analyzed) { openStoredTailorSession(m.id); }
           else { openStoredCv(m.id); }
         });
         batchBody.appendChild(tr);
+        // Restore checked state
+        if (checkedIds.has(m.id)) {
+          tr.querySelector("input[type=checkbox]").checked = true;
+        }
       });
       batchSelectAll.checked = false;
       updateBatchBtns();
@@ -2716,8 +2730,25 @@
       var r = await fetch("/store/batch", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload) });
       var data = await r.json();
       if (!data.jobs || !data.jobs.length) return;
+      if (data.skipped) {
+        appLog("Batch " + action + ": skipped " + data.skipped + " (already analyzed with same JD)");
+        // Uncheck skipped CVs
+        var jobStoreIds = new Set((data.jobs || []).map(function(j) { return j.store_id; }));
+        ids.forEach(function(sid) {
+          if (!jobStoreIds.has(sid)) {
+            var cb = batchBody.querySelector('input[data-id="' + sid + '"]');
+            if (cb) cb.checked = false;
+          }
+        });
+        updateBatchBtns();
+      }
+      if (!data.jobs || !data.jobs.length) {
+        appLog("Batch " + action + ": nothing to do");
+        loadBatchStore();
+        return;
+      }
       appLog("Batch " + action + ": " + data.jobs.length + " job(s) started");
-      pollBatchJobs(data.jobs.map(function(j) { return j.job_id; }), action === "generate" || action === "anonymize", action);
+      pollBatchJobs(data.jobs, action === "generate" || action === "anonymize", action);
     }
 
     function triggerDownload(url) {
@@ -2729,31 +2760,52 @@
       setTimeout(function() { document.body.removeChild(a); }, 1000);
     }
 
-    function pollBatchJobs(jobIds, autoDownload, actionName) {
-      var remaining = new Set(jobIds);
-      var done = 0, failed = 0, total = jobIds.length, polling = false;
+    var batchPollInterval = null;
+    var batchCancelled = false;
+    var batchRemainingJobs = null; // Map of job_id -> store_id for active batch
+
+    function pollBatchJobs(jobMap, autoDownload, actionName) {
+      // jobMap: [{store_id, job_id}, ...]
+      var remaining = new Map(jobMap.map(function(j) { return [j.job_id, j.store_id]; }));
+      batchRemainingJobs = remaining;
+      var done = 0, failed = 0, total = remaining.size, polling = false;
+      batchCancelled = false;
       var activeBtn = actionName === "analyze" ? batchBtns.analyze : batchBtns.generate;
       var label = actionName === "analyze" ? "Analyze" : "Generate";
-      activeBtn.disabled = true;
+      batchBtns.analyze.disabled = true;
+      batchBtns.generate.disabled = true;
+      batchBtns.del.disabled = true;
       activeBtn.textContent = "0/" + total + "…";
       setStatus("Batch: 0/" + total, 0, "");
       statusBarFile.textContent = (actionName === "analyze" ? "Analyzing" : "Generating") + "…";
-      var iv = setInterval(async function() {
-        if (polling) return;
+      // Show stop button
+      batchStopBtn.classList.remove("hidden");
+      batchPollInterval = setInterval(async function() {
+        if (polling || batchCancelled) return;
         polling = true;
-        for (var jid of Array.from(remaining)) {
+        // Clear previous highlight
+        batchBody.querySelectorAll("tr.batch-active").forEach(function(tr) { tr.classList.remove("batch-active"); });
+        for (var [jid, sid] of Array.from(remaining.entries())) {
+          if (batchCancelled) break;
           try {
             var r = await fetch("/jobs/" + jid);
             var d = await r.json();
             if (d.status === "Done" || d.ready) {
               done++; remaining.delete(jid);
               appLog("Batch job done: " + jid);
-              if (autoDownload) {
-                triggerDownload("/jobs/" + jid + "/download");
-              }
+              if (autoDownload) triggerDownload("/jobs/" + jid + "/download");
+              var cb = batchBody.querySelector('input[data-id="' + sid + '"]');
+              if (cb) { cb.checked = false; cb.closest("tr").classList.remove("batch-active"); }
+              updateBatchRow(sid, actionName);
             } else if (d.status === "Failed") {
               failed++; remaining.delete(jid);
               appLog("Batch job failed: " + (d.error || jid), "error");
+              var cb2 = batchBody.querySelector('input[data-id="' + sid + '"]');
+              if (cb2) { cb2.checked = false; cb2.closest("tr").classList.remove("batch-active"); }
+            } else if (d.status === "Analyzing" || d.status === "Converting" || d.status === "Tailoring") {
+              // Highlight currently processing row
+              var cbA = batchBody.querySelector('input[data-id="' + sid + '"]');
+              if (cbA) cbA.closest("tr").classList.add("batch-active");
             }
           } catch(e) {}
         }
@@ -2761,17 +2813,56 @@
         var pct = Math.round((done + failed) / total * 100);
         activeBtn.textContent = done + "/" + total + "…";
         setStatus("Batch: " + done + "/" + total, pct, "");
-        if (!remaining.size) {
-          clearInterval(iv);
+        if (!remaining.size || batchCancelled) {
+          clearInterval(batchPollInterval);
+          batchPollInterval = null;
+          batchRemainingJobs = null;
+          batchStopBtn.classList.add("hidden");
+          batchBody.querySelectorAll("tr.batch-active").forEach(function(tr) { tr.classList.remove("batch-active"); });
           activeBtn.textContent = label;
           updateBatchBtns();
           setStatus("Ready", 0, "");
           statusBarFile.textContent = "";
-          appLog("Batch complete: " + done + " done" + (failed ? ", " + failed + " failed" : ""));
+          appLog("Batch " + (batchCancelled ? "stopped" : "complete") + ": " + done + " done" + (failed ? ", " + failed + " failed" : ""));
           loadBatchStore();
         }
       }, 1500);
     }
+
+    function updateBatchRow(storeId, actionName) {
+      // Refresh this row's data from server to update match%
+      fetch("/store/" + storeId).then(function(r) { return r.json(); }).then(function(data) {
+        var meta = data._meta || {};
+        var cb = batchBody.querySelector('input[data-id="' + storeId + '"]');
+        if (!cb) return;
+        var tr = cb.closest("tr");
+        if (!tr) return;
+        // Find match_pct cell and update it
+        var visCols = getVisibleCols();
+        var matchIdx = -1;
+        visCols.forEach(function(col, i) { if (col.key === "match_pct") matchIdx = i; });
+        if (matchIdx >= 0 && meta.match_pct) {
+          var td = tr.children[matchIdx + 1]; // +1 for checkbox col
+          if (td) {
+            var pct = meta.match_pct;
+            var color = pct >= 70 ? "#16a34a" : pct >= 40 ? "#d97706" : "#dc2626";
+            td.innerHTML = '<span style="color:' + color + ';font-weight:700">' + pct + '%</span>';
+          }
+        }
+      }).catch(function(){});
+    }
+
+    var batchStopBtn = document.getElementById("batchStopBtn");
+    batchStopBtn.addEventListener("click", function() {
+      batchCancelled = true;
+      // Cancel remaining jobs on server
+      if (batchRemainingJobs) {
+        batchRemainingJobs.forEach(function(sid, jid) {
+          fetch("/jobs/" + jid + "/cancel", { method: "POST" }).catch(function(){});
+        });
+      }
+      appLog("Batch stopped by user");
+    });
 
     batchBtns.analyze.addEventListener("click", function() {
       var jd = document.getElementById("jdText").value.trim();
