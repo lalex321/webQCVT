@@ -966,11 +966,16 @@ class QCVWebEngine:
 
         if tailor and jd_text.strip():
             # Gap analysis: LLM compares CV vs JD before tailoring
+            # Skip if no gap_ready_cb and no pause_event (skip_gap mode)
+            skip_gap = (gap_ready_cb is None and pause_event is None)
             try:
-                self._status(status_cb, "Analyzing fit", 50)
-                gap_result = self._analyze_gap(data, jd_text)
-                gap_result["_output_base"] = _build_output_base_name(data, anonymize=False)
-                self._last_gap_analysis = gap_result
+                if skip_gap:
+                    gap_result = None
+                else:
+                    self._status(status_cb, "Analyzing fit", 50)
+                    gap_result = self._analyze_gap(data, jd_text)
+                    gap_result["_output_base"] = _build_output_base_name(data, anonymize=False)
+                    self._last_gap_analysis = gap_result
                 if gap_ready_cb and gap_result:
                     gap_ready_cb(gap_result, copy.deepcopy(data))
                 if pause_event is not None:

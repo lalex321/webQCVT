@@ -686,10 +686,11 @@
           <input id="batchSearch" class="batch-search" type="search" placeholder="Search…" autocomplete="off" />
           <select id="batchTemplate" class="prompt-select" style="max-width:130px"></select>
           <label style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:#475569;margin:0"><input id="batchAnonymize" type="checkbox" /> Anonymize</label>
+          <button id="batchAnalyze" class="batch-btn" disabled>Analyze</button>
           <button id="batchGenerate" class="batch-btn" disabled>Generate</button>
           <button id="batchDelete" class="batch-btn danger" disabled>Delete</button>
           <div style="margin-left:auto;position:relative;display:inline-block">
-            <button id="batchColsBtn" class="batch-btn" title="Choose columns">Cols</button>
+            <button id="batchColsBtn" class="batch-btn" title="Choose columns" style="font-size:14px;line-height:1;padding:2px 6px">&#9776;</button>
             <div id="batchColsMenu" class="cols-menu hidden"></div>
           </div>
           <span id="batchCount" style="font-size:11px;color:#64748b;white-space:nowrap"></span>
@@ -1027,7 +1028,7 @@
 
     function updateBtnLabel() {
       if (!generateBtn.disabled) {
-        if (gapAnalysisReady && tailorInput.checked) {
+        if ((gapAnalysisReady || preloadedFitJson) && tailorInput.checked) {
           generateBtn.textContent = "Generate Tailored CV";
         } else {
           generateBtn.textContent = tailorInput.checked ? "Analyze" : "Convert";
@@ -2099,24 +2100,32 @@
     });
     /* Preserve previously selected file if user cancels file picker */
     let lastSelectedFile = null;
+    let filePickerOpen = false;
+    fileInput.addEventListener("click", () => { filePickerOpen = true; });
     fileInput.addEventListener("change", () => {
+      filePickerOpen = false;
       if (fileInput.files.length) {
         lastSelectedFile = fileInput.files[0];
         preloadedFitJson = null;
         currentStoreId = null;
         resetForNewInput();
-        /* If JSON file — parse and auto-fill */
         const ext = lastSelectedFile.name.split(".").pop().toLowerCase();
         if (ext === "json") {
           handleJsonCvUpload(lastSelectedFile);
         }
-      } else if (lastSelectedFile) {
-        /* Cancel pressed — restore previous file via DataTransfer */
+      }
+    });
+    /* Restore file on cancel — use both cancel event and focus fallback */
+    function restoreFile() {
+      if (filePickerOpen && lastSelectedFile && !fileInput.files.length) {
         const dt = new DataTransfer();
         dt.items.add(lastSelectedFile);
         fileInput.files = dt.files;
       }
-    });
+      filePickerOpen = false;
+    }
+    fileInput.addEventListener("cancel", restoreFile);
+    window.addEventListener("focus", () => { if (filePickerOpen) setTimeout(restoreFile, 300); });
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -2308,16 +2317,17 @@
     const batchTemplate = document.getElementById("batchTemplate");
     const batchAnonCheck = document.getElementById("batchAnonymize");
     const batchBtns = {
+      analyze: document.getElementById("batchAnalyze"),
       generate: document.getElementById("batchGenerate"),
       del: document.getElementById("batchDelete"),
     };
-
     function batchSelected() {
       return Array.from(batchBody.querySelectorAll("input[type=checkbox]:checked")).map(function(cb) { return cb.dataset.id; });
     }
 
     function updateBatchBtns() {
       var n = batchSelected().length;
+      batchBtns.analyze.disabled = !n;
       batchBtns.generate.disabled = !n;
       batchBtns.del.disabled = !n;
     }
@@ -2702,7 +2712,7 @@
       var data = await r.json();
       if (!data.jobs || !data.jobs.length) return;
       appLog("Batch " + action + ": " + data.jobs.length + " job(s) started");
-      pollBatchJobs(data.jobs.map(function(j) { return j.job_id; }), action === "generate" || action === "anonymize");
+      pollBatchJobs(data.jobs.map(function(j) { return j.job_id; }), action === "generate" || action === "anonymize", action);
     }
 
     function triggerDownload(url) {
@@ -2714,13 +2724,15 @@
       setTimeout(function() { document.body.removeChild(a); }, 1000);
     }
 
-    function pollBatchJobs(jobIds, autoDownload) {
+    function pollBatchJobs(jobIds, autoDownload, actionName) {
       var remaining = new Set(jobIds);
       var done = 0, failed = 0, total = jobIds.length, polling = false;
-      batchBtns.generate.disabled = true;
-      batchBtns.generate.textContent = "0/" + total + "…";
+      var activeBtn = actionName === "analyze" ? batchBtns.analyze : batchBtns.generate;
+      var label = actionName === "analyze" ? "Analyze" : "Generate";
+      activeBtn.disabled = true;
+      activeBtn.textContent = "0/" + total + "…";
       setStatus("Batch: 0/" + total, 0, "");
-      statusBarFile.textContent = "Generating…";
+      statusBarFile.textContent = (actionName === "analyze" ? "Analyzing" : "Generating") + "…";
       var iv = setInterval(async function() {
         if (polling) return;
         polling = true;
@@ -2742,19 +2754,25 @@
         }
         polling = false;
         var pct = Math.round((done + failed) / total * 100);
-        batchBtns.generate.textContent = done + "/" + total + "…";
+        activeBtn.textContent = done + "/" + total + "…";
         setStatus("Batch: " + done + "/" + total, pct, "");
         if (!remaining.size) {
           clearInterval(iv);
-          batchBtns.generate.textContent = "Generate";
+          activeBtn.textContent = label;
           updateBatchBtns();
           setStatus("Ready", 0, "");
           statusBarFile.textContent = "";
           appLog("Batch complete: " + done + " done" + (failed ? ", " + failed + " failed" : ""));
+          loadBatchStore();
         }
       }, 1500);
     }
 
+    batchBtns.analyze.addEventListener("click", function() {
+      var jd = document.getElementById("jdText").value.trim();
+      if (!jd) { alert("Please enter a Job Description on the Convert tab first."); return; }
+      batchAction("analyze", { jd_text: jd });
+    });
     batchBtns.generate.addEventListener("click", function() { batchAction("generate", { anonymize: batchAnonCheck.checked }); });
     batchBtns.del.addEventListener("click", function() { batchAction("delete"); });
 
@@ -2928,6 +2946,7 @@
         // Set up preloaded state so form submit sends JSON with skip_gap
         var savedEdits = { checked_skills: session.focus_skills || [] };
         preloadedFitJson = { gap_analysis: gapData, user_edits: savedEdits };
+        hasGapData = true;
 
         // Render gap analysis
         renderGapAnalysis(gapData, savedEdits);

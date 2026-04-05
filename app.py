@@ -368,6 +368,24 @@ async def batch_store_action(request: Request):
                 deleted += 1
         return {"ok": True, "deleted": deleted}
 
+    if action == "analyze":
+        if not jd_text.strip():
+            raise HTTPException(status_code=400, detail="JD text is required for analysis")
+        created_jobs = []
+        for sid in ids:
+            cv_json = _load_store_cv(sid)
+            if not cv_json:
+                continue
+            job = jobs.create(f"analyze_{sid[:8]}", anonymize=False, autofix=False, template_name="")
+            thread = threading.Thread(
+                target=_run_batch_analyze,
+                args=(job.job_id, sid, cv_json, jd_text),
+                daemon=True,
+            )
+            thread.start()
+            created_jobs.append({"store_id": sid, "job_id": job.job_id})
+        return {"ok": True, "jobs": created_jobs}
+
     if action not in ("generate", "anonymize", "tailor"):
         raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
 
@@ -742,6 +760,32 @@ def _load_store_cv(store_id: str) -> dict | None:
     data = json.loads(p.read_text(encoding="utf-8"))
     data.pop("_meta", None)
     return data
+
+
+def _run_batch_analyze(job_id: str, store_id: str, cv_json: dict, jd_text: str) -> None:
+    """Lightweight batch analysis: gap analysis only, no DOCX generation."""
+    _JOB_SEMAPHORE.acquire()
+    try:
+        jobs.update(job_id, status="Analyzing", progress=30)
+        engine = QCVWebEngine(TEMPLATES_DIR)
+        engine.config = _core.load_config()
+        engine.model_name = choose_model_name(engine.config)
+        api_key = resolve_api_key(engine.app_dir, engine.config)
+        configure_gemini(api_key)
+
+        gap_result = engine._analyze_gap(cv_json, jd_text)
+        gap_result["_output_base"] = _build_output_base_name(cv_json, anonymize=False)
+
+        _save_store_gap(store_id, gap_result, jd_text, cv_json)
+
+        job = jobs.get(job_id)
+        if job:
+            setattr(job, "_gap_analysis", gap_result)
+        jobs.update(job_id, status="Done", progress=100)
+    except Exception as e:
+        jobs.update(job_id, status="Failed", progress=100, error=str(e))
+    finally:
+        _JOB_SEMAPHORE.release()
 
 
 def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float, skip_gap: bool = False, preloaded_focus_skills: list | None = None, preloaded_data: dict | None = None, preloaded_gap: dict | None = None) -> None:
